@@ -73,17 +73,7 @@ export function AppifyMobileSimulator() {
               ))}
             </div>
 
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => alert('Demo APK: my-store-debug-1.4.2.apk')}
-                className="px-5 py-2.5 rounded-lg bg-[var(--accent)] text-white text-[13px] font-semibold hover:bg-[var(--accent-hover)] transition-colors"
-              >
-                Download demo APK
-              </button>
-              <span className="font-mono text-[12px] text-[var(--text-tertiary)]">
-                Android 14 · API 34
-              </span>
-            </div>
+
           </div>
 
           {/* Right — phone */}

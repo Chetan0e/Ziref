@@ -2,12 +2,13 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Github, Shield, Cpu, Lock, ArrowRight } from 'lucide-react';
+import { Moon, Sun, ArrowRight } from 'lucide-react';
 import { ZirefLogo } from '@/components/ui/ZirefLogo';
 import { HeroBrowserMockup } from '@/components/landing/HeroBrowserMockup';
 import { ArchitecturePipeline } from '@/components/landing/ArchitecturePipeline';
 import { FrameworkMatrix } from '@/components/landing/FrameworkMatrix';
 import { AppifyMobileSimulator } from '@/components/landing/AppifyMobileSimulator';
+import { SecuritySection } from '@/components/landing/SecuritySection';
 import { LandingFaq } from '@/components/landing/LandingFaq';
 
 // ─── Nav link type ───────────────────────────────────────────────────────────
@@ -48,35 +49,36 @@ const footerLinks = {
   ],
 };
 
-// ─── Security architecture items ─────────────────────────────────────────────
-const securityItems = [
-  {
-    icon: Shield,
-    title: 'Zip Slip & bomb defense',
-    desc: 'Path traversal validation on every extracted file. Uncompressed ratio capped at 100× to prevent decompression DOS.',
-  },
-  {
-    icon: Cpu,
-    title: 'Hardened cgroup quotas',
-    desc: 'Non-root UID 10001. Memory: 1024 MB. CPU: 1.0 core. PIDs: 128. Zero host socket exposure. Container destroyed post-build.',
-  },
-  {
-    icon: Lock,
-    title: 'Encryption at rest',
-    desc: 'Environment variables encrypted with Fernet symmetric keys. Values masked in UI, decrypted strictly in memory at build time.',
-  },
-];
+
 
 // ─── Navbar ──────────────────────────────────────────────────────────────────
 function Navbar() {
   const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [isDark, setIsDark] = useState(false);
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 12);
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  // Sync isDark with the actual class on mount
+  useEffect(() => {
+    setIsDark(document.documentElement.classList.contains('dark'));
+  }, []);
+
+  const toggleTheme = () => {
+    const next = !isDark;
+    setIsDark(next);
+    if (next) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('ziref-theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('ziref-theme', 'light');
+    }
+  };
 
   return (
     <header
@@ -111,15 +113,14 @@ function Navbar() {
 
         {/* Right actions */}
         <div className="flex items-center gap-3">
-          <a
-            href="https://github.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="GitHub"
-            className="hidden sm:flex items-center justify-center w-8 h-8 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
-          >
-            <Github className="w-4 h-4" />
-          </a>
+          <button
+              onClick={toggleTheme}
+              aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+              className="hidden sm:flex items-center justify-center w-8 h-8 rounded-full text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-muted)] transition-colors"
+            >
+              {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
           <Link
             href="/login"
             className="hidden sm:inline-block text-[13px] font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors px-2"
@@ -260,109 +261,10 @@ export default function LandingPage() {
       {/* ── Appify ───────────────────────────────────────────────────────── */}
       <AppifyMobileSimulator />
 
+
       {/* ── Security ─────────────────────────────────────────────────────── */}
-      <section id="security" className="py-24 border-t border-[var(--border)]">
-        <div className="max-w-layout mx-auto px-6 lg:px-10">
-          {/* Header — left-aligned */}
-          <div className="grid lg:grid-cols-2 gap-10 mb-14">
-            <div>
-              <p className="font-mono text-[13px] text-[var(--text-tertiary)] tracking-wider uppercase mb-3">
-                Security
-              </p>
-              <h2
-                className="text-4xl lg:text-5xl font-bold text-[var(--text-primary)]"
-                style={{ letterSpacing: '-0.03em', lineHeight: 1.1 }}
-              >
-                Secure by default.
-                <br />Isolated by design.
-              </h2>
-            </div>
-            <div className="flex items-end">
-              <p className="text-[16px] text-[var(--text-secondary)]" style={{ lineHeight: 1.65 }}>
-                Uploaded code is inherently untrusted. Ziref ensures that no user archive can compromise the host, access neighboring sandboxes, or leak runtime credentials.
-              </p>
-            </div>
-          </div>
+      <SecuritySection />
 
-          {/* Architecture diagram */}
-          <div className="mb-12 border border-[var(--border)] rounded-lg overflow-hidden bg-[#0D1117]">
-            <div className="px-5 py-3 border-b border-[#30363D]">
-              <span className="font-mono text-[11px] text-[#8B949E]">sandbox-architecture.txt</span>
-            </div>
-            <div className="p-6">
-              <pre
-                className="font-mono text-[12px] leading-relaxed text-[#8B949E]"
-                aria-label="Sandbox architecture diagram"
-              >
-{`                     Ziref Platform
-                           │
-             ┌─────────────▼─────────────┐
-             │       API Gateway         │
-             │   auth · rate-limit · log │
-             └─────────────┬─────────────┘
-                           │
-             ┌─────────────▼─────────────┐
-             │       Build Worker        │
-             │   detect · queue · run    │
-             └─────────────┬─────────────┘
-                           │
-             ┌─────────────▼─────────────┐
-             │    Ephemeral Sandbox      │
-             │                           │
-             │  user:    UID 10001       │
-             │  cpu:     1.0 core        │
-             │  memory:  1024 MB         │
-             │  pids:    128 max         │
-             │  fs:      read-only       │
-             │  net:     bridge isolated │
-             │  timeout: 300s hard       │
-             └─────────────┬─────────────┘
-                           │
-             ┌─────────────▼─────────────┐
-             │    Artifact Capture       │
-             │  sha256 · destroy · store │
-             └───────────────────────────┘`}
-              </pre>
-            </div>
-          </div>
-
-          {/* Security principles — horizontal rows */}
-          <div className="divide-y divide-[var(--border)] border-y border-[var(--border)]">
-            {securityItems.map(({ icon: Icon, title, desc }) => (
-              <div key={title} className="flex items-start gap-6 py-6">
-                <div className="w-8 h-8 shrink-0 flex items-center justify-center text-[var(--accent)]">
-                  <Icon className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="text-[14px] font-semibold text-[var(--text-primary)] mb-1">
-                    {title}
-                  </div>
-                  <div className="text-[14px] text-[var(--text-secondary)]" style={{ lineHeight: 1.6 }}>
-                    {desc}
-                  </div>
-                </div>
-              </div>
-            ))}
-
-            {/* Ephemeral environments */}
-            <div className="flex items-start gap-6 py-6">
-              <div className="w-8 h-8 shrink-0 flex items-center justify-center text-[var(--accent)]">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <path d="M8 1v14M1 8h14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                </svg>
-              </div>
-              <div>
-                <div className="text-[14px] font-semibold text-[var(--text-primary)] mb-1">
-                  Ephemeral environments
-                </div>
-                <div className="text-[14px] text-[var(--text-secondary)]" style={{ lineHeight: 1.6 }}>
-                  Every build container is created fresh and destroyed immediately after artifact capture. No state persists between builds. No cross-tenant access is possible.
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
 
       {/* ── FAQ ──────────────────────────────────────────────────────────── */}
       <LandingFaq />
