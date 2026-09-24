@@ -1,0 +1,116 @@
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: ziref-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: ziref
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ziref-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/api.Dockerfile
+    container_name: ziref-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=development
+      - MONGODB_URI=mongodb://mongodb:27017/ziref
+      - REDIS_URL=redis://redis:6379/0
+      - STORAGE_PATH=/var/ziref/storage
+      - BASE_DOMAIN=localhost:8080
+      - JWT_SECRET=ziref_super_secret_jwt_key_replace_in_production_2026
+    volumes:
+      - ziref_storage:/var/ziref/storage
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/worker.Dockerfile
+    container_name: ziref-worker
+    restart: unless-stopped
+    environment:
+      - APP_ENV=development
+      - MONGODB_URI=mongodb://mongodb:27017/ziref
+      - REDIS_URL=redis://redis:6379/0
+      - STORAGE_PATH=/var/ziref/storage
+      - BASE_DOMAIN=localhost:8080
+      - BUILD_TIMEOUT_SECONDS=300
+    volumes:
+      - ziref_storage:/var/ziref/storage
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  deployer:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/deployer.Dockerfile
+    container_name: ziref-deployer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - APP_ENV=development
+      - MONGODB_URI=mongodb://mongodb:27017/ziref
+      - REDIS_URL=redis://redis:6379/0
+      - STORAGE_PATH=/var/ziref/storage
+    volumes:
+      - ziref_storage:/var/ziref/storage
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/dashboard.Dockerfile
+    container_name: ziref-dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_DEPLOY_DOMAIN=localhost:8080
+    depends_on:
+      - api
+
+volumes:
+  mongodb_data:
+  redis_data:
+  ziref_storage:

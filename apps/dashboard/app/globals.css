@@ -1,0 +1,180 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Design Tokens ─────────────────────────────────────────────────────── */
+:root {
+  /* Background */
+  --background:       #FAFAF9;
+  --surface:          #FFFFFF;
+  --surface-muted:    #F4F4F2;
+  --surface-raised:   #FFFFFF;
+
+  /* Text */
+  --text-primary:     #0C0C0D;
+  --text-secondary:   #4B5563;
+  --text-tertiary:    #9CA3AF;
+  --text-inverse:     #FFFFFF;
+
+  /* Border */
+  --border:           #E5E7EB;
+  --border-strong:    #D1D5DB;
+
+  /* Accent — Ziref Blue */
+  --accent:           #1D4ED8;
+  --accent-hover:     #1E40AF;
+  --accent-subtle:    #EFF6FF;
+  --accent-text:      #1D4ED8;
+
+  /* Semantic */
+  --success:          #059669;
+  --success-subtle:   #ECFDF5;
+  --warning:          #D97706;
+  --warning-subtle:   #FFFBEB;
+  --error:            #DC2626;
+  --error-subtle:     #FEF2F2;
+
+  /* Radius */
+  --radius-sm:        4px;
+  --radius-md:        8px;
+  --radius-lg:        12px;
+
+  /* Spacing scale */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+
+  /* Shadow */
+  --shadow-xs:  0 1px 2px rgba(0,0,0,0.04);
+  --shadow-sm:  0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md:  0 4px 12px rgba(0,0,0,0.06), 0 2px 4px rgba(0,0,0,0.04);
+  --shadow-lg:  0 12px 32px rgba(0,0,0,0.08), 0 4px 8px rgba(0,0,0,0.04);
+}
+
+.dark {
+  --background:       #09090B;
+  --surface:          #111113;
+  --surface-muted:    #18181A;
+  --surface-raised:   #1C1C1F;
+
+  --text-primary:     #F4F4F5;
+  --text-secondary:   #A1A1AA;
+  --text-tertiary:    #71717A;
+  --text-inverse:     #09090B;
+
+  --border:           #27272A;
+  --border-strong:    #3F3F46;
+
+  --accent:           #3B82F6;
+  --accent-hover:     #60A5FA;
+  --accent-subtle:    #1E3A5F;
+  --accent-text:      #93C5FD;
+
+  --success:          #10B981;
+  --success-subtle:   #052E16;
+  --warning:          #F59E0B;
+  --warning-subtle:   #1C1500;
+  --error:            #EF4444;
+  --error-subtle:     #1F0A0A;
+
+  --shadow-xs:  0 1px 2px rgba(0,0,0,0.3);
+  --shadow-sm:  0 1px 3px rgba(0,0,0,0.4);
+  --shadow-md:  0 4px 12px rgba(0,0,0,0.5);
+  --shadow-lg:  0 12px 32px rgba(0,0,0,0.6);
+}
+
+/* ─── Base Reset ─────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  color: var(--text-primary);
+  background: var(--background);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'kern' 1, 'liga' 1, 'calt' 1;
+}
+
+/* ─── Typography ─────────────────────────────────────────────────────────── */
+.font-mono {
+  font-feature-settings: 'tnum' 1, 'zero' 1;
+}
+
+/* ─── Pipeline animation ─────────────────────────────────────────────────── */
+@keyframes flowDash {
+  0%   { stroke-dashoffset: 24; }
+  100% { stroke-dashoffset: 0;  }
+}
+
+.animate-flow-dash {
+  stroke-dasharray: 6, 6;
+  animation: flowDash 1.2s linear infinite;
+}
+
+.animate-flow-paused {
+  animation-play-state: paused !important;
+}
+
+/* ─── Section reveal ─────────────────────────────────────────────────────── */
+@keyframes fadeInUp {
+  0%   { opacity: 0; transform: translateY(10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.4s ease-out forwards;
+}
+
+/* ─── Log stream ─────────────────────────────────────────────────────────── */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+.animate-cursor-blink {
+  animation: blink 1s step-end infinite;
+}
+
+/* ─── Reduced motion ─────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ─── Scrollbar ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
+/* ─── Focus ──────────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ─── Selection ──────────────────────────────────────────────────────────── */
+::selection {
+  background: var(--accent);
+  color: var(--text-inverse);
+}
