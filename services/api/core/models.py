@@ -45,6 +45,7 @@ class MobileAppStatus(str, Enum):
 class LogLevel(str, Enum):
     DEBUG = "debug"
     INFO = "info"
+    WARN = "warning"
     WARNING = "warning"
     ERROR = "error"
 
@@ -60,8 +61,10 @@ class BuildStage(str, Enum):
     DEPLOYMENT = "deployment"
     CLEANUP = "cleanup"
 
+from services.api.core.datetime_util import utc_now_iso
+
 class BuildLogEvent(BaseModel):
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    timestamp: str = Field(default_factory=utc_now_iso)
     stage: str
     level: LogLevel = LogLevel.INFO
     message: str

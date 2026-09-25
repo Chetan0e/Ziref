@@ -37,6 +37,8 @@ out/
 *.pfx
 
 # ─── Runtime Storage (never commit data volumes) ─────────────────────────────
+storage/
+storage/data/
 storage/uploads/
 storage/workspaces/
 storage/artifacts/

@@ -1,13 +1,15 @@
 import os
+import glob
 import time
 import asyncio
 import mimetypes
 import logging
 from typing import Optional, Tuple
 from fastapi import FastAPI, Request, Response, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from bson import ObjectId
 
+from services.api.core.datetime_util import utc_now_iso
 from services.api.core.config import settings
 from services.api.core.database import connect_to_database, close_database_connection, get_database
 from services.api.core.redis_client import get_project_routing
@@ -78,7 +80,7 @@ async def _extract_slug_from_request(request: Request) -> Tuple[Optional[str], s
     return None, path.lstrip("/")
 
 async def _resolve_active_deployment_id(slug: str) -> Optional[str]:
-    # Check Redis cache first
+    # 1. Check Redis cache first
     try:
         routing = await get_project_routing(slug)
         if routing and "deployment_id" in routing:
@@ -86,14 +88,40 @@ async def _resolve_active_deployment_id(slug: str) -> Optional[str]:
     except Exception as e:
         logger.warning(f"Redis routing lookup error: {e}")
 
-    # Fallback to MongoDB
+    # 2. Fallback to Database
     try:
         db = get_database()
         project = await db.projects.find_one({"slug": slug})
         if project and project.get("active_deployment_id"):
             return str(project["active_deployment_id"])
+
+        # Check deployments collection directly by subdomain
+        dep = await db.deployments.find_one(
+            {"subdomain": slug, "status": "READY"},
+            sort=[("created_at", -1)]
+        )
+        if dep:
+            return str(dep["_id"])
+
+        if project:
+            dep_by_pid = await db.deployments.find_one(
+                {"project_id": str(project["_id"]), "status": "READY"},
+                sort=[("created_at", -1)]
+            )
+            if dep_by_pid:
+                return str(dep_by_pid["_id"])
     except Exception as e:
-        logger.error(f"MongoDB routing lookup error: {e}")
+        logger.error(f"Database routing lookup error: {e}")
+
+    # 3. Direct filesystem check: storage/deployments/{slug}
+    try:
+        variants = [slug, slug.replace("_", "-"), slug.replace("-", "_")]
+        for variant in variants:
+            slug_dir = os.path.join(settings.STORAGE_PATH, "deployments", variant)
+            if os.path.exists(slug_dir) and os.path.isdir(slug_dir):
+                return variant
+    except Exception:
+        pass
 
     return None
 
@@ -101,6 +129,8 @@ def _apply_security_and_cache_headers(res: Response, clean_subpath: str) -> Resp
     # Standard production security headers
     res.headers["X-Content-Type-Options"] = "nosniff"
     res.headers["X-Frame-Options"] = "SAMEORIGIN"
+    # Allow embedding in local dashboard previews and mobile simulator
+    res.headers["Content-Security-Policy"] = "frame-ancestors 'self' http://localhost:* http://127.0.0.1:* *;"
     res.headers["X-XSS-Protection"] = "1; mode=block"
     res.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     res.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
@@ -116,7 +146,17 @@ def _apply_security_and_cache_headers(res: Response, clean_subpath: str) -> Resp
     return res
 
 @app.api_route("/{full_path:path}", methods=["GET", "HEAD", "OPTIONS"])
-async def route_site(request: Request, full_path: str):
+async def route_site(request: Request, full_path: str = ""):
+    # Ensure directory requests end with a trailing slash so relative links/assets resolve correctly
+    path = request.url.path
+    if path.startswith("/sites/"):
+        parts = path.strip("/").split("/")
+        if len(parts) == 2 and not path.endswith("/"):
+            target = path + "/"
+            if request.url.query:
+                target += f"?{request.url.query}"
+            return RedirectResponse(url=target, status_code=302)
+
     slug, subpath = await _extract_slug_from_request(request)
 
     if not slug:
@@ -176,6 +216,11 @@ async def route_site(request: Request, full_path: str):
             ext = os.path.splitext(clean_subpath)[1]
             if not ext or ext.lower() in [".html", ".htm"]:
                 res = FileResponse(index_html, media_type="text/html")
+        else:
+            # Check nested index.html
+            nested_html = glob.glob(os.path.join(deploy_root, "**", "index.html"), recursive=True)
+            if nested_html:
+                res = FileResponse(nested_html[0], media_type="text/html")
 
     if res is None:
         res = HTMLResponse(
@@ -219,7 +264,7 @@ async def _log_access_event(slug: str, deployment_id: str, method: str, path: st
             "duration_ms": duration_ms,
             "client_ip": client_ip,
             "user_agent": user_agent[:120],
-            "timestamp": datetime.now(timezone.utc).isoformat() + "Z"
+            "timestamp": utc_now_iso()
         }
 
         await db.runtime_logs.insert_one(event)

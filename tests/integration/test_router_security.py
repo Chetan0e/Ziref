@@ -1,4 +1,5 @@
 import os
+import uuid
 import pytest
 from httpx import AsyncClient, ASGITransport
 from bson import ObjectId
@@ -13,7 +14,7 @@ async def test_router_security_and_cache_headers():
     db = get_database()
     project_id = str(ObjectId())
     deployment_id = str(ObjectId())
-    slug = f"sec-test-{deployment_id[:6]}"
+    slug = f"sec-test-{uuid.uuid4().hex[:8]}"
 
     # Setup deployment folder with index.html and static asset
     deploy_dir = os.path.join(settings.STORAGE_PATH, "deployments", deployment_id)
@@ -54,7 +55,7 @@ async def test_router_custom_domain_lookup():
     db = get_database()
     project_id = str(ObjectId())
     deployment_id = str(ObjectId())
-    slug = f"dom-test-{deployment_id[:6]}"
+    slug = f"dom-test-{uuid.uuid4().hex[:8]}"
     custom_domain = f"{slug}.mycompany.com"
 
     deploy_dir = os.path.join(settings.STORAGE_PATH, "deployments", deployment_id)

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from typing import Dict, Any
 
+from services.api.core.datetime_util import utc_now_iso
 from services.api.core.database import get_database
 from services.api.core.security import hash_password, verify_password, create_access_token, get_current_user_token
 from services.api.schemas.auth import UserRegister, UserLogin, TokenResponse, UserResponse
@@ -19,7 +20,7 @@ async def register(payload: UserRegister):
             detail="A user with this email address already exists."
         )
 
-    now_str = datetime.now(timezone.utc).isoformat() + "Z"
+    now_str = utc_now_iso()
     user_doc = {
         "email": payload.email.lower(),
         "password_hash": hash_password(payload.password),

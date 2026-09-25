@@ -3,6 +3,7 @@ from bson import ObjectId
 from datetime import datetime, timezone
 from typing import List, Dict, Any
 
+from services.api.core.datetime_util import utc_now_iso
 from services.api.core.database import get_database
 from services.api.core.security import get_current_user_token, encrypt_secret, decrypt_secret
 from services.api.schemas.env import EnvVarCreate, EnvVarResponse
@@ -47,7 +48,7 @@ async def create_or_update_env_var(
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
 
-    now_str = datetime.now(timezone.utc).isoformat() + "Z"
+    now_str = utc_now_iso()
     encrypted = encrypt_secret(payload.value)
 
     res = await db.environment_variables.find_one_and_update(

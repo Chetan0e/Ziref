@@ -2,214 +2,373 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { api } from '@/lib/api';
-import { Project } from '@ziref/types';
+import { api, SystemStatus } from '@/lib/api';
+import { Project, Deployment } from '@ziref/types';
+import { useAuth } from '@/lib/auth';
 import { StatusBadge } from '@/components/ui/StatusBadge';
-import { useRouter } from 'next/navigation';
+import { formatDate, formatRelativeTime } from '@/lib/date';
 import {
   FolderGit2,
   Zap,
-  Smartphone,
+  Clock,
   PlusCircle,
   ExternalLink,
   ArrowRight,
-  Clock,
+  Server,
+  Activity,
+  Layers,
+  ArrowUpRight,
   CheckCircle2,
-  AlertTriangle,
-  Sparkles,
-  Loader2
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 
+interface ActivityItem {
+  id: string;
+  type: 'project' | 'deployment';
+  title: string;
+  subtitle: string;
+  status: string;
+  timestamp: string;
+  link: string;
+}
+
 export default function DashboardOverviewPage() {
-  const router = useRouter();
+  const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [demoLoading, setDemoLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    api.getProjects()
-      .then(data => {
-        setProjects(data);
-        setLoading(false);
-      })
-      .catch(err => {
-        console.error(err);
-        setLoading(false);
-      });
-  }, []);
-
-  const handleInstantDemo = async () => {
-    setDemoLoading(true);
+  const fetchDashboardData = async () => {
     try {
-      const res = await api.createDemoProject();
-      router.push(`/dashboard/projects/${res.project_id}`);
-    } catch (err: any) {
-      alert(err.message || 'Failed to initialize demo');
-      setDemoLoading(false);
+      const [projs, sys] = await Promise.all([
+        api.getProjects(),
+        api.getSystemStatus().catch(() => null),
+      ]);
+      setProjects(projs);
+      setSystemStatus(sys);
+
+      // Fetch deployments across all user projects
+      if (projs.length > 0) {
+        const depPromises = projs.map(p => api.getDeployments(p.id).catch(() => []));
+        const depResults = await Promise.all(depPromises);
+        const allDeps = depResults.flat().sort((a, b) => {
+          const tA = new Date(a.created_at).getTime() || 0;
+          const tB = new Date(b.created_at).getTime() || 0;
+          return tB - tA;
+        });
+        setDeployments(allDeps);
+      } else {
+        setDeployments([]);
+      }
+    } catch (err) {
+      console.error('Failed to load overview data', err);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
   };
 
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
+
+  const handleRefresh = () => {
+    setRefreshing(true);
+    fetchDashboardData();
+  };
+
+  // Determine time of day greeting
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good morning';
+    if (hour < 18) return 'Good afternoon';
+    return 'Good evening';
+  };
+
   const deployedCount = projects.filter(p => p.status === 'DEPLOYED' || p.active_deployment_id).length;
-  const buildingCount = projects.filter(p => ['BUILDING', 'BUILD_QUEUED', 'DEPLOYING'].includes(p.status)).length;
+  const buildingCount = projects.filter(p => ['BUILDING', 'BUILD_QUEUED', 'DEPLOYING', 'PREPARING'].includes(p.status)).length;
+  const firstName = user?.name ? user.name.split(' ')[0] : 'Developer';
+
+  // Build real activity stream
+  const activityStream: ActivityItem[] = [];
+
+  deployments.slice(0, 10).forEach((d) => {
+    const proj = projects.find(p => p.id === d.project_id);
+    activityStream.push({
+      id: `dep-${d.id}`,
+      type: 'deployment',
+      title: d.status === 'READY' ? 'Deployment live' : `Deployment ${d.status.toLowerCase()}`,
+      subtitle: proj ? `${proj.name} (production)` : `Deployment #${d.id.slice(-6)}`,
+      status: d.status,
+      timestamp: d.created_at,
+      link: proj ? `/dashboard/projects/${proj.id}` : '/dashboard/deployments',
+    });
+  });
+
+  projects.slice(0, 4).forEach((p) => {
+    activityStream.push({
+      id: `proj-${p.id}`,
+      type: 'project',
+      title: 'Project workspace active',
+      subtitle: `${p.name} · ${p.framework || 'detected structure'}`,
+      status: p.status,
+      timestamp: p.updated_at || p.created_at,
+      link: `/dashboard/projects/${p.id}`,
+    });
+  });
+
+  // Sort activities by timestamp
+  activityStream.sort((a, b) => {
+    const tA = new Date(a.timestamp).getTime() || 0;
+    const tB = new Date(b.timestamp).getTime() || 0;
+    return tB - tA;
+  });
 
   return (
-    <div className="space-y-8">
-      {/* Top Banner */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-zinc-800">
+    <div className="space-y-6">
+      {/* ─── Top Section ──────────────────────────────────────────────────── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-[var(--border)]">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">System Overview</h1>
-          <p className="text-xs text-zinc-400 mt-1">Real-time status of your projects, builds, and deployed applications</p>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[var(--text-primary)]">
+            {getGreeting()}, {firstName}.
+          </h1>
+          <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+            Your projects, build pipelines, and production deployments at a glance.
+          </p>
         </div>
-        <div className="flex items-center gap-3">
+
+        <div className="flex items-center gap-2">
           <button
-            onClick={handleInstantDemo}
-            disabled={demoLoading}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-zinc-900 border border-zinc-700 hover:border-sky-500 text-sky-400 hover:text-white font-medium text-xs transition-all shadow-md disabled:opacity-50"
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="p-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-all disabled:opacity-50"
+            title="Refresh dashboard metrics"
           >
-            {demoLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 text-amber-400" />}
-            <span>1-Click Demo (React + Vite)</span>
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
           </button>
+
           <Link
             href="/dashboard/projects/new"
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-sky-500 text-black font-semibold text-xs hover:bg-sky-400 transition-colors shadow-lg"
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-[var(--accent)] text-white text-xs font-semibold hover:bg-[var(--accent-hover)] transition-colors shadow-xs"
           >
             <PlusCircle className="w-4 h-4" />
-            New Project
+            <span>New Project</span>
           </Link>
         </div>
       </div>
 
-      {/* Metrics Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="p-5 rounded-xl border border-zinc-800 bg-zinc-950">
-          <div className="flex items-center justify-between text-zinc-400 mb-2">
-            <span className="text-xs font-medium uppercase tracking-wider">Total Projects</span>
-            <FolderGit2 className="w-4 h-4 text-zinc-500" />
+      {/* ─── Operational Metrics ───────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        {/* Metric: Projects */}
+        <div className="p-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-xs">
+          <div className="flex items-center justify-between text-[var(--text-secondary)] mb-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wider">Projects</span>
+            <FolderGit2 className="w-4 h-4 text-[var(--text-tertiary)]" />
           </div>
-          <div className="text-2xl font-bold text-white">{loading ? '-' : projects.length}</div>
-          <div className="text-[11px] text-zinc-500 mt-1">Managed workspaces</div>
+          <div className="text-2xl font-bold text-[var(--text-primary)]">
+            {loading ? '—' : projects.length}
+          </div>
+          <div className="text-[11px] text-[var(--text-tertiary)] mt-1">
+            {projects.length === 0 ? 'No workspaces yet' : projects.length === 1 ? '1 active workspace' : `${projects.length} active workspaces`}
+          </div>
         </div>
 
-        <div className="p-5 rounded-xl border border-zinc-800 bg-zinc-950">
-          <div className="flex items-center justify-between text-zinc-400 mb-2">
-            <span className="text-xs font-medium uppercase tracking-wider">Active Deployments</span>
-            <Zap className="w-4 h-4 text-emerald-400" />
+        {/* Metric: Live Deployments */}
+        <div className="p-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-xs">
+          <div className="flex items-center justify-between text-[var(--text-secondary)] mb-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wider">Live Deployments</span>
+            <Zap className="w-4 h-4 text-emerald-500" />
           </div>
-          <div className="text-2xl font-bold text-emerald-400">{loading ? '-' : deployedCount}</div>
-          <div className="text-[11px] text-zinc-500 mt-1">Serving production traffic</div>
+          <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+            {loading ? '—' : deployedCount}
+          </div>
+          <div className="text-[11px] text-[var(--text-tertiary)] mt-1">
+            {deployedCount > 0 ? `${deployedCount} active production ${deployedCount === 1 ? 'site' : 'sites'}` : 'No live deployments'}
+          </div>
         </div>
 
-        <div className="p-5 rounded-xl border border-zinc-800 bg-zinc-950">
-          <div className="flex items-center justify-between text-zinc-400 mb-2">
-            <span className="text-xs font-medium uppercase tracking-wider">Current Builds</span>
-            <Clock className="w-4 h-4 text-amber-400" />
+        {/* Metric: Active Builds */}
+        <div className="p-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-xs">
+          <div className="flex items-center justify-between text-[var(--text-secondary)] mb-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wider">Active Builds</span>
+            <Clock className="w-4 h-4 text-blue-500" />
           </div>
-          <div className="text-2xl font-bold text-amber-400">{loading ? '-' : buildingCount}</div>
-          <div className="text-[11px] text-zinc-500 mt-1">Active worker jobs</div>
+          <div className="text-2xl font-bold text-[var(--text-primary)]">
+            {loading ? '—' : buildingCount}
+          </div>
+          <div className="text-[11px] text-[var(--text-tertiary)] mt-1">
+            {buildingCount > 0 ? `${buildingCount} build ${buildingCount === 1 ? 'job' : 'jobs'} in progress` : 'No active jobs in queue'}
+          </div>
         </div>
 
-        <div className="p-5 rounded-xl border border-zinc-800 bg-zinc-950">
-          <div className="flex items-center justify-between text-zinc-400 mb-2">
-            <span className="text-xs font-medium uppercase tracking-wider">Storage Engine</span>
-            <CheckCircle2 className="w-4 h-4 text-sky-400" />
+        {/* Metric: Total Deployments */}
+        <div className="p-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-xs">
+          <div className="flex items-center justify-between text-[var(--text-secondary)] mb-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wider">Total Deployments</span>
+            <Layers className="w-4 h-4 text-indigo-500" />
           </div>
-          <div className="text-2xl font-bold text-sky-400">Local Object</div>
-          <div className="text-[11px] text-zinc-500 mt-1">Persistent volume mounted</div>
+          <div className="text-2xl font-bold text-[var(--text-primary)]">
+            {loading ? '—' : deployments.length}
+          </div>
+          <div className="text-[11px] text-[var(--text-tertiary)] mt-1">
+            {deployments.length > 0 ? `${deployments.length} immutable ${deployments.length === 1 ? 'release' : 'releases'}` : 'No releases deployed yet'}
+          </div>
         </div>
       </div>
 
-      {/* Recent Projects Table */}
-      <div className="rounded-xl border border-zinc-800 bg-zinc-950 overflow-hidden">
-        <div className="p-5 border-b border-zinc-800 flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-white">Recent Projects</h2>
-            <p className="text-xs text-zinc-400 mt-0.5">Quick access to your deployments and build pipelines</p>
-          </div>
-          <Link
-            href="/dashboard/projects"
-            className="text-xs text-sky-400 hover:underline flex items-center gap-1"
-          >
-            View all <ArrowRight className="w-3 h-3" />
-          </Link>
-        </div>
-
-        {loading ? (
-          <div className="p-8 text-center text-zinc-500 text-xs font-mono">Loading projects...</div>
-        ) : projects.length === 0 ? (
-          <div className="p-12 text-center">
-            <div className="w-12 h-12 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto mb-3 text-zinc-500">
-              <FolderGit2 className="w-6 h-6" />
+      {/* ─── Two-Column Operations Layout ──────────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left: Recent Projects (2 cols) */}
+        <div className="lg:col-span-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] overflow-hidden shadow-xs">
+          <div className="p-4 sm:p-5 border-b border-[var(--border)] flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-[var(--text-primary)]">Managed Projects</h2>
+              <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">Quick access to deployments and repositories</p>
             </div>
-            <h3 className="text-sm font-medium text-white mb-1">No projects deployed yet</h3>
-            <p className="text-xs text-zinc-400 max-w-sm mx-auto mb-4">
-              Get started by uploading your first project ZIP. Ziref will automatically analyze and build it.
-            </p>
-            <Link
-              href="/dashboard/projects/new"
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-sky-500 text-black font-semibold text-xs hover:bg-sky-400 transition-colors"
-            >
-              <PlusCircle className="w-4 h-4" />
-              Create First Project
-            </Link>
+            {projects.length > 0 && (
+              <Link
+                href="/dashboard/projects"
+                className="text-xs font-medium text-[var(--accent)] hover:underline flex items-center gap-1"
+              >
+                View all ({projects.length}) <ArrowRight className="w-3 h-3" />
+              </Link>
+            )}
           </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-zinc-900/50 border-b border-zinc-800 text-zinc-400 font-medium">
-                <tr>
-                  <th className="px-5 py-3">Project Name</th>
-                  <th className="px-5 py-3">Framework</th>
-                  <th className="px-5 py-3">Status</th>
-                  <th className="px-5 py-3">Production URL</th>
-                  <th className="px-5 py-3">Created</th>
-                  <th className="px-5 py-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-800/60">
-                {projects.slice(0, 5).map((project) => (
-                  <tr key={project.id} className="hover:bg-zinc-900/40 transition-colors">
-                    <td className="px-5 py-3.5 font-medium text-white">
-                      <Link href={`/dashboard/projects/${project.id}`} className="hover:text-sky-400">
-                        {project.name}
-                      </Link>
-                    </td>
-                    <td className="px-5 py-3.5 text-zinc-400 font-mono">
-                      {project.framework || 'pending'}
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <StatusBadge status={project.status} />
-                    </td>
-                    <td className="px-5 py-3.5">
-                      {project.active_url ? (
-                        <a
-                          href={project.active_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sky-400 hover:underline flex items-center gap-1"
-                        >
-                          {project.slug} <ExternalLink className="w-3 h-3" />
-                        </a>
-                      ) : (
-                        <span className="text-zinc-600">—</span>
-                      )}
-                    </td>
-                    <td className="px-5 py-3.5 text-zinc-500">
-                      {project.created_at ? new Date(project.created_at).toLocaleDateString() : '-'}
-                    </td>
-                    <td className="px-5 py-3.5 text-right">
-                      <Link
-                        href={`/dashboard/projects/${project.id}`}
-                        className="text-xs text-zinc-400 hover:text-white px-2.5 py-1 rounded bg-zinc-900 border border-zinc-800 hover:border-zinc-700 transition-colors"
-                      >
-                        Manage
-                      </Link>
-                    </td>
+
+          {loading ? (
+            <div className="p-12 text-center text-xs font-mono text-[var(--text-tertiary)]">
+              Loading workspaces...
+            </div>
+          ) : projects.length === 0 ? (
+            <div className="p-12 text-center">
+              <div className="w-12 h-12 rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] flex items-center justify-center mx-auto mb-3 text-[var(--text-tertiary)]">
+                <FolderGit2 className="w-6 h-6" />
+              </div>
+              <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-1">No projects yet</h3>
+              <p className="text-xs text-[var(--text-secondary)] max-w-sm mx-auto mb-5 leading-relaxed">
+                Upload your first project ZIP or import a Git repository to begin automated analysis and deployment.
+              </p>
+              <Link
+                href="/dashboard/projects/new"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-xs font-semibold hover:bg-[var(--accent-hover)] transition-colors"
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>Upload First Project</span>
+              </Link>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-[var(--surface-muted)] border-b border-[var(--border)] text-[var(--text-secondary)] font-medium">
+                  <tr>
+                    <th className="px-4 py-2.5">Project</th>
+                    <th className="px-4 py-2.5">Framework</th>
+                    <th className="px-4 py-2.5">Status</th>
+                    <th className="px-4 py-2.5">Production URL</th>
+                    <th className="px-4 py-2.5 text-right">Updated</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-[var(--border)]">
+                  {projects.slice(0, 5).map((project) => (
+                    <tr key={project.id} className="hover:bg-[var(--surface-muted)]/50 transition-colors">
+                      <td className="px-4 py-3">
+                        <Link
+                          href={`/dashboard/projects/${project.id}`}
+                          className="font-medium text-[var(--text-primary)] hover:text-[var(--accent)] transition-colors"
+                        >
+                          {project.name}
+                        </Link>
+                        <div className="text-[10px] text-[var(--text-tertiary)] font-mono">{project.slug}</div>
+                      </td>
+                      <td className="px-4 py-3 text-[var(--text-secondary)] font-mono text-[11px]">
+                        {project.framework || 'auto-detect'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusBadge status={project.status} />
+                      </td>
+                      <td className="px-4 py-3">
+                        {project.active_url ? (
+                          <a
+                            href={project.active_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[var(--accent)] hover:underline inline-flex items-center gap-1 font-mono text-[11px]"
+                          >
+                            <span>{project.slug}</span>
+                            <ArrowUpRight className="w-3 h-3" />
+                          </a>
+                        ) : (
+                          <span className="text-[var(--text-tertiary)]">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right text-[var(--text-tertiary)] font-mono text-[11px]">
+                        {formatRelativeTime(project.updated_at || project.created_at)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Right: Real Activity Stream (1 col) */}
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] overflow-hidden shadow-xs flex flex-col">
+          <div className="p-4 sm:p-5 border-b border-[var(--border)] flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-[var(--text-primary)]">Recent Activity</h2>
+              <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">Live operational events</p>
+            </div>
+            <Activity className="w-4 h-4 text-[var(--text-tertiary)]" />
           </div>
-        )}
+
+          <div className="p-4 flex-1">
+            {loading ? (
+              <div className="p-6 text-center text-xs font-mono text-[var(--text-tertiary)]">
+                Loading events...
+              </div>
+            ) : activityStream.length === 0 ? (
+              <div className="p-8 text-center text-xs text-[var(--text-tertiary)]">
+                No recent activity recorded yet.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {activityStream.slice(0, 6).map((item) => (
+                  <Link
+                    key={item.id}
+                    href={item.link}
+                    className="flex items-start gap-3 p-2 -mx-2 rounded-lg hover:bg-[var(--surface-muted)] transition-colors group"
+                  >
+                    <div className="mt-1 shrink-0">
+                      <span className={`w-2 h-2 rounded-full block ${
+                        item.status === 'READY' || item.status === 'DEPLOYED' ? 'bg-emerald-500' :
+                        item.status === 'FAILED' || item.status === 'BUILD_FAILED' ? 'bg-rose-500' :
+                        item.status === 'BUILDING' || item.status === 'DEPLOYING' ? 'bg-blue-500 animate-pulse' :
+                        'bg-zinc-400'
+                      }`} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-xs font-medium text-[var(--text-primary)] truncate group-hover:text-[var(--accent)] transition-colors">
+                          {item.title}
+                        </span>
+                        <span className="text-[10px] text-[var(--text-tertiary)] shrink-0 font-mono">
+                          {formatRelativeTime(item.timestamp)}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-[var(--text-secondary)] truncate">
+                        {item.subtitle}
+                      </p>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

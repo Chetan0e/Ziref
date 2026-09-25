@@ -8,6 +8,8 @@ import re
 import os
 import shutil
 import hashlib
+import asyncio
+from services.api.core.datetime_util import utc_now_iso
 from services.api.core.config import settings
 from services.api.core.database import get_database
 from services.api.core.security import get_current_user_token
@@ -71,7 +73,7 @@ async def create_project(payload: ProjectCreate, token_data: Dict[str, Any] = De
         slug = f"{base_slug}-{counter}"
         counter += 1
 
-    now_str = datetime.now(timezone.utc).isoformat() + "Z"
+    now_str = utc_now_iso()
     doc = {
         "user_id": token_data["sub"],
         "name": payload.name.strip(),
@@ -107,117 +109,11 @@ async def create_project(payload: ProjectCreate, token_data: Dict[str, Any] = De
         updated_at=doc["updated_at"]
     )
 
-@router.post("/create-demo", status_code=status.HTTP_201_CREATED)
-async def create_demo_project(token_data: Dict[str, Any] = Depends(get_current_user_token)):
-    """Automatically sets up and triggers a build for the bundled React+Vite sample project."""
-    db = get_database()
-    now_str = datetime.now(timezone.utc).isoformat() + "Z"
-
-    base_slug = "demo-react"
-    slug = base_slug
-    counter = 1
-    while await db.projects.find_one({"slug": slug}):
-        slug = f"{base_slug}-{counter}"
-        counter += 1
-
-    # 1. Create Project Record
-    proj_doc = {
-        "user_id": token_data["sub"],
-        "name": f"React Vite Demo ({slug})",
-        "slug": slug,
-        "status": ProjectStatus.BUILD_QUEUED.value,
-        "framework": "react",
-        "language": "typescript",
-        "package_manager": "pnpm",
-        "build_command": "pnpm run build",
-        "output_directory": "dist",
-        "active_deployment_id": None,
-        "active_url": None,
-        "created_at": now_str,
-        "updated_at": now_str
-    }
-    proj_res = await db.projects.insert_one(proj_doc)
-    project_id = str(proj_res.inserted_id)
-
-    # 2. Copy bundled fixture ZIP
-    fixture_zip = os.path.abspath("tests/fixtures/ziref-demo-react.zip")
-    upload_id = str(ObjectId())
-    storage_rel_path = os.path.join("uploads", f"{upload_id}_ziref-demo-react.zip")
-    storage_abs_path = os.path.join(settings.STORAGE_PATH, storage_rel_path)
-    os.makedirs(os.path.dirname(storage_abs_path), exist_ok=True)
-    shutil.copyfile(fixture_zip, storage_abs_path)
-
-    with open(fixture_zip, "rb") as f:
-        content = f.read()
-    file_size = len(content)
-    checksum = hashlib.sha256(content).hexdigest()
-
-    # 3. Create Upload Record
-    upload_doc = {
-        "_id": ObjectId(upload_id),
-        "project_id": project_id,
-        "user_id": token_data["sub"],
-        "filename": "ziref-demo-react.zip",
-        "file_size": file_size,
-        "checksum": checksum,
-        "storage_path": storage_rel_path,
-        "analysis": {
-            "projectType": "web",
-            "framework": "react",
-            "language": "typescript",
-            "packageManager": "pnpm",
-            "runtime": "static",
-            "buildCommand": "pnpm run build",
-            "outputDirectory": "dist",
-            "confidence": 0.98,
-            "warnings": []
-        },
-        "created_at": now_str
-    }
-    await db.uploads.insert_one(upload_doc)
-
-    # 4. Create Build Record
-    build_doc = {
-        "project_id": project_id,
-        "upload_id": upload_id,
-        "user_id": token_data["sub"],
-        "status": BuildStatus.QUEUED.value,
-        "framework": "react",
-        "package_manager": "pnpm",
-        "build_command": "pnpm run build",
-        "output_directory": "dist",
-        "exit_code": None,
-        "started_at": None,
-        "completed_at": None,
-        "duration_seconds": None,
-        "error_message": None,
-        "created_at": now_str
-    }
-    b_res = await db.builds.insert_one(build_doc)
-    build_id = str(b_res.inserted_id)
-
-    # 5. Push to Redis build queue
-    await push_job("build", {
-        "build_id": build_id,
-        "project_id": project_id,
-        "upload_id": upload_id,
-        "package_manager": "pnpm",
-        "build_command": "pnpm run build",
-        "output_directory": "dist"
-    })
-
-    return {
-        "project_id": project_id,
-        "slug": slug,
-        "build_id": build_id,
-        "message": "Demo project created and build queued successfully!"
-    }
-
 @router.post("/import-git", status_code=status.HTTP_201_CREATED)
 async def import_git_project(payload: GitImportRequest, token_data: Dict[str, Any] = Depends(get_current_user_token)):
     """Imports a project from a public Git repository, analyzes it, and launches the build."""
     db = get_database()
-    now_str = datetime.now(timezone.utc).isoformat() + "Z"
+    now_str = utc_now_iso()
 
     # 1. Clone or download remote repo into workspace
     try:
@@ -332,23 +228,30 @@ async def import_git_project(payload: GitImportRequest, token_data: Dict[str, An
         if os.path.exists(zip_path):
             os.remove(zip_path)
 
-@router.post("/{project_id}/redeploy", status_code=status.HTTP_202_ACCEPTED)
-async def redeploy_project(project_id: str, token_data: Dict[str, Any] = Depends(get_current_user_token)):
-    """Triggers a new build and deployment using the project's most recent source upload."""
-    db = get_database()
-    if not ObjectId.is_valid(project_id):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid project ID")
-
-    project = await db.projects.find_one({"_id": ObjectId(project_id), "user_id": token_data["sub"]})
+async def _resolve_user_project(db, id_or_slug: str, user_id: str) -> Dict[str, Any]:
+    query: Dict[str, Any] = {"user_id": user_id}
+    if ObjectId.is_valid(id_or_slug):
+        query["_id"] = ObjectId(id_or_slug)
+    else:
+        query["slug"] = id_or_slug
+    project = await db.projects.find_one(query)
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    return project
+
+@router.post("/{id_or_slug}/redeploy", status_code=status.HTTP_202_ACCEPTED)
+async def redeploy_project(id_or_slug: str, token_data: Dict[str, Any] = Depends(get_current_user_token)):
+    """Triggers a new build and deployment using the project's most recent source upload."""
+    db = get_database()
+    project = await _resolve_user_project(db, id_or_slug, token_data["sub"])
+    project_id = str(project["_id"])
 
     # Find latest upload
     latest_upload = await db.uploads.find_one({"project_id": project_id}, sort=[("created_at", -1)])
     if not latest_upload:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No source uploads found for this project")
 
-    now_str = datetime.now(timezone.utc).isoformat() + "Z"
+    now_str = utc_now_iso()
     upload_id = str(latest_upload["_id"])
     build_cmd = project.get("build_command") or "npm run build"
     out_dir = project.get("output_directory") or "dist"
@@ -373,7 +276,7 @@ async def redeploy_project(project_id: str, token_data: Dict[str, Any] = Depends
     build_id = str(b_res.inserted_id)
 
     await db.projects.update_one(
-        {"_id": ObjectId(project_id)},
+        {"_id": project["_id"]},
         {"$set": {"status": ProjectStatus.BUILD_QUEUED.value}}
     )
 
@@ -396,15 +299,7 @@ async def redeploy_project(project_id: str, token_data: Dict[str, Any] = Depends
 @router.get("/{id_or_slug}", response_model=ProjectResponse)
 async def get_project(id_or_slug: str, token_data: Dict[str, Any] = Depends(get_current_user_token)):
     db = get_database()
-    query = {"user_id": token_data["sub"]}
-    if ObjectId.is_valid(id_or_slug):
-        query["_id"] = ObjectId(id_or_slug)
-    else:
-        query["slug"] = id_or_slug
-
-    project = await db.projects.find_one(query)
-    if not project:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    project = await _resolve_user_project(db, id_or_slug, token_data["sub"])
 
     slug = project["slug"]
     active_url = project.get("active_url") or (f"http://{slug}.{settings.BASE_DOMAIN}" if project.get("active_deployment_id") else None)
@@ -425,11 +320,10 @@ async def get_project(id_or_slug: str, token_data: Dict[str, Any] = Depends(get_
         updated_at=project.get("updated_at", "")
     )
 
-@router.patch("/{project_id}", response_model=ProjectResponse)
-async def update_project(project_id: str, payload: ProjectUpdate, token_data: Dict[str, Any] = Depends(get_current_user_token)):
+@router.patch("/{id_or_slug}", response_model=ProjectResponse)
+async def update_project(id_or_slug: str, payload: ProjectUpdate, token_data: Dict[str, Any] = Depends(get_current_user_token)):
     db = get_database()
-    if not ObjectId.is_valid(project_id):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid project ID")
+    project = await _resolve_user_project(db, id_or_slug, token_data["sub"])
 
     updates = {}
     if payload.name:
@@ -440,47 +334,74 @@ async def update_project(project_id: str, payload: ProjectUpdate, token_data: Di
         updates["output_directory"] = payload.output_directory
 
     if updates:
-        updates["updated_at"] = datetime.now(timezone.utc).isoformat() + "Z"
+        updates["updated_at"] = utc_now_iso()
         await db.projects.update_one(
-            {"_id": ObjectId(project_id), "user_id": token_data["sub"]},
+            {"_id": project["_id"]},
             {"$set": updates}
         )
 
-    project = await db.projects.find_one({"_id": ObjectId(project_id), "user_id": token_data["sub"]})
-    if not project:
+    updated_project = await db.projects.find_one({"_id": project["_id"]})
+    if not updated_project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
 
     return ProjectResponse(
-        id=str(project["_id"]),
-        name=project["name"],
-        slug=project["slug"],
-        status=project.get("status", ProjectStatus.CREATED.value),
-        framework=project.get("framework"),
-        language=project.get("language"),
-        package_manager=project.get("package_manager"),
-        build_command=project.get("build_command"),
-        output_directory=project.get("output_directory"),
-        active_deployment_id=project.get("active_deployment_id"),
-        active_url=project.get("active_url"),
-        created_at=project.get("created_at", ""),
-        updated_at=project.get("updated_at", "")
+        id=str(updated_project["_id"]),
+        name=updated_project["name"],
+        slug=updated_project["slug"],
+        status=updated_project.get("status", ProjectStatus.CREATED.value),
+        framework=updated_project.get("framework"),
+        language=updated_project.get("language"),
+        package_manager=updated_project.get("package_manager"),
+        build_command=updated_project.get("build_command"),
+        output_directory=updated_project.get("output_directory"),
+        active_deployment_id=updated_project.get("active_deployment_id"),
+        active_url=updated_project.get("active_url"),
+        created_at=updated_project.get("created_at", ""),
+        updated_at=updated_project.get("updated_at", "")
     )
 
-@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_project(project_id: str, token_data: Dict[str, Any] = Depends(get_current_user_token)):
+@router.delete("/{id_or_slug}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_project(id_or_slug: str, token_data: Dict[str, Any] = Depends(get_current_user_token)):
     db = get_database()
-    if not ObjectId.is_valid(project_id):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid project ID")
+    project = await _resolve_user_project(db, id_or_slug, token_data["sub"])
 
-    res = await db.projects.delete_one({"_id": ObjectId(project_id), "user_id": token_data["sub"]})
-    if res.deleted_count == 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    project_id = str(project["_id"])
+    slug = project.get("slug")
 
-    # Cascade delete related records
-    await db.builds.delete_many({"project_id": project_id})
-    await db.deployments.delete_many({"project_id": project_id})
-    await db.uploads.delete_many({"project_id": project_id})
-    await db.environment_variables.delete_many({"project_id": project_id})
-    await db.mobile_apps.delete_many({"project_id": project_id})
+    # 1. Delete project document
+    await db.projects.delete_one({"_id": project["_id"]})
+
+    # 2. Cascade delete related records across all collections (supporting string and ObjectId formats)
+    target_ids = [project_id]
+    if ObjectId.is_valid(project_id):
+        target_ids.append(ObjectId(project_id))
+
+    for pid in target_ids:
+        await db.builds.delete_many({"project_id": pid})
+        await db.build_events.delete_many({"project_id": pid})
+        await db.deployments.delete_many({"project_id": pid})
+        await db.uploads.delete_many({"project_id": pid})
+        await db.environment_variables.delete_many({"project_id": pid})
+        await db.mobile_apps.delete_many({"project_id": pid})
+        await db.mobile_builds.delete_many({"project_id": pid})
+        await db.custom_domains.delete_many({"project_id": pid})
+        await db.webhooks.delete_many({"project_id": pid})
+        await db.runtime_logs.delete_many({"project_id": pid})
+        await db.analytics.delete_many({"project_id": pid})
+
+    # 3. Clean up physical directories on disk asynchronously in background thread
+    def _cleanup_disk_sync():
+        try:
+            if slug:
+                site_dep = os.path.join(settings.STORAGE_PATH, "deployments", slug)
+                if os.path.exists(site_dep):
+                    shutil.rmtree(site_dep, ignore_errors=True)
+            ws_dir = os.path.join(settings.STORAGE_PATH, "workspaces", project_id)
+            if os.path.exists(ws_dir):
+                shutil.rmtree(ws_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+    asyncio.create_task(asyncio.to_thread(_cleanup_disk_sync))
 
     return None

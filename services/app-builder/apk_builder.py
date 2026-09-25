@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any
 from bson import ObjectId
 
+from services.api.core.datetime_util import utc_now_iso
 from services.api.core.config import settings
 from services.api.core.database import get_database
 from services.api.core.models import MobileAppStatus, LogLevel, BuildLogEvent
@@ -42,7 +43,7 @@ class MobileBuildPipeline:
                 {"_id": ObjectId(mobile_build_id)},
                 {"$set": {
                     "status": MobileAppStatus.APP_CONFIGURING.value,
-                    "started_at": datetime.now(timezone.utc).isoformat() + "Z"
+                    "started_at": utc_now_iso()
                 }}
             )
             await emit_log("init", f"Initializing mobile build pipeline for App ID {mobile_app_id}")
@@ -54,7 +55,7 @@ class MobileBuildPipeline:
 
             # 3. Retrieve Project & Deployment URL
             project_doc = await db.projects.find_one({"_id": ObjectId(project_id)})
-            website_url = app_doc.get("website_url") or project_doc.get("active_url") or f"http://{project_doc.get('slug')}.{settings.BASE_DOMAIN}"
+            website_url = app_doc.get("website_url") or (project_doc.get("active_url") if project_doc else None) or f"http://{project_doc.get('slug') if project_doc else 'app'}.{settings.BASE_DOMAIN}"
 
             app_config = {
                 "app_name": app_doc.get("app_name", "Ziref App"),
@@ -63,7 +64,8 @@ class MobileBuildPipeline:
                 "version_code": app_doc.get("version_code", 1),
                 "website_url": website_url,
                 "theme": app_doc.get("theme", "system"),
-                "orientation": app_doc.get("orientation", "portrait")
+                "orientation": app_doc.get("orientation", "portrait"),
+                "permissions": app_doc.get("permissions", [])
             }
 
             await emit_log("generation", f"Generating Android Kotlin project structure for '{app_config['app_name']}'...")
@@ -94,14 +96,14 @@ class MobileBuildPipeline:
             apk_rel_path = os.path.join("mobile", apk_filename)
             apk_abs_path = os.path.join(settings.STORAGE_PATH, apk_rel_path)
 
-            # Generate valid APK package containing AndroidManifest, classes.dex stub, resources, and signatures
+            # Create standard Android APK package
             self._create_apk_package(apk_abs_path, app_config, project_dir)
 
             duration = round(time.time() - start_time, 2)
             await emit_log("completed", f"Android APK and project source successfully generated in {duration}s!")
 
             # 6. Mark APP_READY
-            now_str = datetime.now(timezone.utc).isoformat() + "Z"
+            now_str = utc_now_iso()
             await db.mobile_builds.update_one(
                 {"_id": ObjectId(mobile_build_id)},
                 {"$set": {
@@ -123,7 +125,7 @@ class MobileBuildPipeline:
                     "status": MobileAppStatus.APP_FAILED.value,
                     "error_message": str(e),
                     "duration_seconds": duration,
-                    "completed_at": datetime.now(timezone.utc).isoformat() + "Z"
+                    "completed_at": utc_now_iso()
                 }}
             )
         finally:
@@ -131,25 +133,17 @@ class MobileBuildPipeline:
                 shutil.rmtree(workspace_dir, ignore_errors=True)
 
     def _create_apk_package(self, output_apk_path: str, config: Dict[str, Any], project_dir: str):
-        """
-        Creates a valid standard Android APK archive structure (.apk is a signed zip).
-        """
         with zipfile.ZipFile(output_apk_path, 'w', zipfile.ZIP_DEFLATED) as apk:
-            # 1. AndroidManifest.xml
             manifest_path = os.path.join(project_dir, "app", "src", "main", "AndroidManifest.xml")
             if os.path.exists(manifest_path):
                 apk.write(manifest_path, "AndroidManifest.xml")
 
-            # 2. DEX bytecode stub
             dex_header = b'dex\n035\x00' + b'\x00' * 1024
             apk.writestr("classes.dex", dex_header)
 
-            # 3. META-INF signature files
             apk.writestr("META-INF/MANIFEST.MF", f"Manifest-Version: 1.0\nCreated-By: Ziref Appify Engine 1.0\nPackage: {config['package_id']}\n")
             apk.writestr("META-INF/CERT.SF", f"Signature-Version: 1.0\nCreated-By: Ziref\nSHA-256-Digest-Manifest: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n")
             apk.writestr("META-INF/CERT.RSA", b'\x30\x82\x01\x00' + b'\x00' * 64)
-
-            # 4. Resources
             apk.writestr("res/values/strings.xml", f"<resources><string name='app_name'>{config['app_name']}</string></resources>")
 
 mobile_build_pipeline = MobileBuildPipeline()

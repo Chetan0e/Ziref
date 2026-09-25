@@ -51,15 +51,28 @@ class MemoryCollection:
                 if str(doc.get("_id")) != str(v):
                     return False
             elif isinstance(v, dict):
-                # Simple handling of $in or direct comparison
+                # Simple handling of query operators
                 if "$in" in v:
                     if doc.get(k) not in v["$in"]:
+                        return False
+                if "$gte" in v:
+                    if doc.get(k, "") < v["$gte"]:
+                        return False
+                if "$lte" in v:
+                    if doc.get(k, "") > v["$lte"]:
+                        return False
+                if "$gt" in v:
+                    if doc.get(k, "") <= v["$gt"]:
+                        return False
+                if "$lt" in v:
+                    if doc.get(k, "") >= v["$lt"]:
                         return False
             elif doc.get(k) != v:
                 return False
         return True
 
     async def insert_one(self, doc: Dict[str, Any]):
+        self.parent.reload_if_stale()
         doc_copy = doc.copy()
         if "_id" not in doc_copy:
             doc_copy["_id"] = ObjectId()
@@ -74,6 +87,7 @@ class MemoryCollection:
         return InsertResult()
 
     async def insert_many(self, docs: List[Dict[str, Any]]):
+        self.parent.reload_if_stale()
         res = []
         for d in docs:
             r = await self.insert_one(d)
@@ -82,18 +96,31 @@ class MemoryCollection:
             inserted_ids = res
         return InsertManyResult()
 
-    async def find_one(self, filter_dict: Dict[str, Any]):
-        for doc in self.parent.data.get(self.name, []):
-            if self._matches(doc, filter_dict):
-                return doc.copy()
-        return None
+    async def find_one(self, filter_dict: Optional[Dict[str, Any]] = None, *args, sort=None, **kwargs):
+        self.parent.reload_if_stale()
+        filter_dict = filter_dict or {}
+        matches = [d for d in self.parent.data.get(self.name, []) if self._matches(d, filter_dict)]
+        if not matches:
+            return None
+        if sort:
+            field = sort[0][0] if isinstance(sort, list) else sort
+            reverse = (sort[0][1] == -1) if isinstance(sort, list) else False
+            matches.sort(key=lambda x: str(x.get(field, "")), reverse=reverse)
+        return matches[0].copy()
 
     def find(self, filter_dict: Optional[Dict[str, Any]] = None):
+        self.parent.reload_if_stale()
         filter_dict = filter_dict or {}
         matches = [d.copy() for d in self.parent.data.get(self.name, []) if self._matches(d, filter_dict)]
         return MemoryCursor(matches)
 
+    async def count_documents(self, filter_dict: Optional[Dict[str, Any]] = None) -> int:
+        self.parent.reload_if_stale()
+        filter_dict = filter_dict or {}
+        return sum(1 for doc in self.parent.data.get(self.name, []) if self._matches(doc, filter_dict))
+
     async def update_one(self, filter_dict: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):
+        self.parent.reload_if_stale()
         matched = 0
         modified = 0
         for doc in self.parent.data.get(self.name, []):
@@ -128,6 +155,7 @@ class MemoryCollection:
         return await self.find_one(filter_dict)
 
     async def delete_one(self, filter_dict: Dict[str, Any]):
+        self.parent.reload_if_stale()
         items = self.parent.data.get(self.name, [])
         for i, doc in enumerate(items):
             if self._matches(doc, filter_dict):
@@ -141,6 +169,7 @@ class MemoryCollection:
         return DelResEmpty()
 
     async def delete_many(self, filter_dict: Dict[str, Any]):
+        self.parent.reload_if_stale()
         items = self.parent.data.get(self.name, [])
         before = len(items)
         self.parent.data[self.name] = [d for d in items if not self._matches(d, filter_dict)]
@@ -160,6 +189,7 @@ class MemoryDatabase:
         self.name = "ziref"
         self.persistence_path = persistence_path
         self._collections: Dict[str, MemoryCollection] = {}
+        self._last_mtime: float = 0.0
         self._load()
 
     def __getattr__(self, name: str) -> MemoryCollection:
@@ -173,20 +203,38 @@ class MemoryDatabase:
     async def command(self, cmd: str) -> Dict[str, Any]:
         return {"ok": 1.0}
 
-    def _load(self):
+    def reload_if_stale(self):
         if self.persistence_path and os.path.exists(self.persistence_path):
             try:
-                with open(self.persistence_path, "r", encoding="utf-8") as f:
-                    raw = json.load(f)
+                mtime = os.path.getmtime(self.persistence_path)
+                if mtime > self._last_mtime:
+                    self._load()
+            except Exception:
+                pass
+
+    def _load(self):
+        if self.persistence_path and os.path.exists(self.persistence_path):
+            import time
+            for attempt in range(4):
+                try:
+                    self._last_mtime = os.path.getmtime(self.persistence_path)
+                    with open(self.persistence_path, "r", encoding="utf-8") as f:
+                        raw = json.load(f)
+                    new_data = {}
                     for col_name, docs in raw.items():
-                        self.data[col_name] = []
+                        new_data[col_name] = []
                         for d in docs:
                             if "_id" in d and isinstance(d["_id"], str) and ObjectId.is_valid(d["_id"]):
                                 d["_id"] = ObjectId(d["_id"])
-                            self.data[col_name].append(d)
-                logger.info(f"Loaded fallback database from {self.persistence_path}")
-            except Exception as e:
-                logger.warning(f"Failed to load fallback db: {e}")
+                            new_data[col_name].append(d)
+                    self.data = new_data
+                    logger.info(f"Loaded fallback database from {self.persistence_path}")
+                    break
+                except Exception as e:
+                    if attempt < 3:
+                        time.sleep(0.05)
+                    else:
+                        logger.warning(f"Failed to load fallback db: {e}")
 
     def schedule_save(self):
         if not self.persistence_path:
@@ -202,8 +250,22 @@ class MemoryDatabase:
                         dc["_id"] = str(dc["_id"])
                     col_list.append(dc)
                 serializable[col_name] = col_list
-            with open(self.persistence_path, "w", encoding="utf-8") as f:
+            temp_file = f"{self.persistence_path}.tmp"
+            with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(serializable, f, indent=2)
+            import time
+            replaced = False
+            for _ in range(6):
+                try:
+                    os.replace(temp_file, self.persistence_path)
+                    replaced = True
+                    break
+                except (PermissionError, OSError):
+                    time.sleep(0.04)
+            if not replaced:
+                with open(self.persistence_path, "w", encoding="utf-8") as f:
+                    json.dump(serializable, f, indent=2)
+            self._last_mtime = os.path.getmtime(self.persistence_path)
         except Exception as e:
             logger.warning(f"Failed to save fallback db: {e}")
 

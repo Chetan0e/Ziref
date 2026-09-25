@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List
 from bson import ObjectId
 
+from services.api.core.datetime_util import utc_now_iso
 from services.api.core.database import get_database
 
 logger = logging.getLogger("ziref.webhooks")
@@ -32,7 +33,7 @@ class WebhookDispatcher:
             payload = {
                 "event": event_type,
                 "project_id": project_id,
-                "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
+                "timestamp": utc_now_iso(),
                 "data": data
             }
             payload_bytes = json.dumps(payload, default=str).encode("utf-8")

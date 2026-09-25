@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from bson import ObjectId
 import secrets
 
+from services.api.core.datetime_util import utc_now_iso
 from services.api.core.database import get_database
 from services.api.core.security import get_current_user_token
 from services.api.core.webhooks import webhook_dispatcher
@@ -61,7 +62,7 @@ async def create_webhook(project_id: str, payload: WebhookCreate, token_data: Di
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
 
-    now_str = datetime.now(timezone.utc).isoformat() + "Z"
+    now_str = utc_now_iso()
     generated_secret = secrets.token_hex(20)
 
     doc = {

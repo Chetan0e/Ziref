@@ -8,13 +8,14 @@ class ProjectDetector:
     """
     Deterministic analyzer that inspects a project workspace directory
     and infers framework, language, package manager, build command, and output directory.
+    Supports: Static HTML/JS/CSS, React, Vite, Next.js, Vue, Angular, Svelte, Astro, Python, and Generic.
     """
 
     def analyze(self, workspace_path: str) -> AnalysisResult:
         workspace = os.path.abspath(workspace_path)
         warnings: List[str] = []
 
-        # Find project root (handle single folder enclosing the zip content)
+        # Find project root (handle single folder enclosing the zip content or macosx artifacts)
         root_dir = self._find_project_root(workspace)
 
         package_json_path = os.path.join(root_dir, "package.json")
@@ -23,8 +24,8 @@ class ProjectDetector:
         if has_package_json:
             return self._analyze_node_project(root_dir, package_json_path, warnings)
 
-        # Check Python
-        if os.path.exists(os.path.join(root_dir, "requirements.txt")) or os.path.exists(os.path.join(root_dir, "pyproject.toml")):
+        # Check Python projects
+        if os.path.exists(os.path.join(root_dir, "requirements.txt")) or os.path.exists(os.path.join(root_dir, "pyproject.toml")) or os.path.exists(os.path.join(root_dir, "Pipfile")):
             return AnalysisResult(
                 projectType="web",
                 framework="python",
@@ -32,14 +33,14 @@ class ProjectDetector:
                 packageManager="pip",
                 runtime="python",
                 buildCommand=None,
-                startCommand="python main.py",
+                startCommand="python main.py" if os.path.exists(os.path.join(root_dir, "main.py")) else ("python app.py" if os.path.exists(os.path.join(root_dir, "app.py")) else None),
                 outputDirectory=".",
                 port=8000,
                 confidence=0.90,
                 warnings=warnings
             )
 
-        # Check Static HTML/JS
+        # Check Static HTML/CSS/JS (direct in root)
         if os.path.exists(os.path.join(root_dir, "index.html")):
             return AnalysisResult(
                 projectType="web",
@@ -51,36 +52,74 @@ class ProjectDetector:
                 startCommand=None,
                 outputDirectory=".",
                 port=80,
+                confidence=0.98,
+                warnings=warnings
+            )
+
+        # Check if index.html exists in a subfolder (e.g. public/index.html, src/index.html, dist/index.html, or nested site folder)
+        html_matches = glob.glob(os.path.join(root_dir, "**", "index.html"), recursive=True)
+        if html_matches:
+            # Sort by shortest relative path to get closest to root
+            html_matches.sort(key=lambda p: len(os.path.relpath(p, root_dir).split(os.sep)))
+            target_html = html_matches[0]
+            rel_folder = os.path.relpath(os.path.dirname(target_html), root_dir).replace("\\", "/")
+            out_dir = "." if rel_folder in [".", ""] else rel_folder
+            return AnalysisResult(
+                projectType="web",
+                framework="html",
+                language="html",
+                packageManager="none",
+                runtime="static",
+                buildCommand=None,
+                startCommand=None,
+                outputDirectory=out_dir,
+                port=80,
                 confidence=0.95,
                 warnings=warnings
             )
 
-        # Default fallback
-        warnings.append("No standard project manifest (package.json, index.html) found.")
+        # Check if any .html file exists in the directory
+        any_html = glob.glob(os.path.join(root_dir, "*.html"))
+        if any_html:
+            return AnalysisResult(
+                projectType="web",
+                framework="html",
+                language="html",
+                packageManager="none",
+                runtime="static",
+                buildCommand=None,
+                startCommand=None,
+                outputDirectory=".",
+                port=80,
+                confidence=0.90,
+                warnings=warnings
+            )
+
+        # Default fallback: Static project (no compilation, none package manager)
+        warnings.append("No standard project manifest (package.json, index.html) found. Treating as static assets.")
         return AnalysisResult(
             projectType="generic",
             framework="static",
             language="javascript",
-            packageManager="npm",
+            packageManager="none",
             runtime="static",
             buildCommand=None,
             startCommand=None,
             outputDirectory=".",
-            confidence=0.40,
+            confidence=0.50,
             warnings=warnings
         )
 
     def _find_project_root(self, base_path: str) -> str:
-        # If directory contains only 1 folder, drill down (common with GitHub zip releases)
-        entries = [e for e in os.listdir(base_path) if not e.startswith(".")]
-        if len(entries) == 1:
-            nested = os.path.join(base_path, entries[0])
-            if os.path.isdir(nested) and (
-                os.path.exists(os.path.join(nested, "package.json")) or
-                os.path.exists(os.path.join(nested, "index.html")) or
-                os.path.exists(os.path.join(nested, "requirements.txt"))
-            ):
-                return nested
+        # If directory contains only 1 folder (ignoring __MACOSX, hidden files), drill down
+        valid_entries = [
+            e for e in os.listdir(base_path)
+            if not e.startswith(".") and e != "__MACOSX" and not e.startswith("~")
+        ]
+        if len(valid_entries) == 1:
+            nested = os.path.join(base_path, valid_entries[0])
+            if os.path.isdir(nested):
+                return self._find_project_root(nested)
         return base_path
 
     def _detect_package_manager(self, root_dir: str) -> str:

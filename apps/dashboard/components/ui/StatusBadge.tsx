@@ -1,24 +1,23 @@
 import React from 'react';
+import { getStatusPresentation } from '@/lib/status';
 
 interface StatusBadgeProps {
-  status: string;
+  status: string | null | undefined;
+  showIcon?: boolean;
+  className?: string;
 }
 
-export function StatusBadge({ status }: StatusBadgeProps) {
-  let color = 'bg-zinc-800 text-zinc-300 border-zinc-700';
-
-  if (['READY', 'DEPLOYED', 'BUILT', 'APP_READY'].includes(status)) {
-    color = 'bg-emerald-950/60 text-emerald-400 border-emerald-800';
-  } else if (['BUILDING', 'DEPLOYING', 'QUEUED', 'PREPARING', 'APP_BUILDING', 'APP_CONFIGURING', 'ANALYZING'].includes(status)) {
-    color = 'bg-amber-950/60 text-amber-400 border-amber-800 animate-pulse';
-  } else if (['FAILED', 'BUILD_FAILED', 'DEPLOY_FAILED', 'APP_FAILED'].includes(status)) {
-    color = 'bg-rose-950/60 text-rose-400 border-rose-800';
-  }
+export function StatusBadge({ status, showIcon = true, className = '' }: StatusBadgeProps) {
+  const presentation = getStatusPresentation(status);
+  const Icon = presentation.icon;
 
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${color}`}>
-      <span className="w-1.5 h-1.5 rounded-full bg-current"></span>
-      {status}
+    <span
+      title={presentation.description}
+      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border transition-colors ${presentation.badgeClass} ${className}`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${presentation.dotClass}`} />
+      <span className="truncate">{presentation.label}</span>
     </span>
   );
 }

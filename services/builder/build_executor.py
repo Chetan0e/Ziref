@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from bson import ObjectId
 
+from services.api.core.datetime_util import utc_now_iso
 from services.api.core.config import settings
 from services.api.core.database import get_database
 from services.api.core.models import BuildStatus, BuildStage, LogLevel, BuildLogEvent, ProjectStatus
@@ -34,7 +35,7 @@ class BuildPipelineExecutor:
             {"_id": ObjectId(build_id)},
             {"$set": {
                 "status": BuildStatus.BUILDING.value,
-                "started_at": datetime.now(timezone.utc).isoformat() + "Z"
+                "started_at": utc_now_iso()
             }}
         )
         await db.projects.update_one(
@@ -68,8 +69,17 @@ class BuildPipelineExecutor:
                 message=f"Build initialized for build ID: {build_id}"
             ))
 
-            # Retrieve upload record
-            upload_record = await db.uploads.find_one({"_id": ObjectId(upload_id)})
+            # Retrieve upload record with resiliency retry
+            upload_record = None
+            for _ in range(5):
+                if ObjectId.is_valid(upload_id):
+                    upload_record = await db.uploads.find_one({"_id": ObjectId(upload_id)})
+                if not upload_record:
+                    upload_record = await db.uploads.find_one({"_id": upload_id})
+                if upload_record:
+                    break
+                await asyncio.sleep(0.5)
+
             if not upload_record:
                 raise Exception(f"Upload record not found for ID: {upload_id}")
 
@@ -97,9 +107,13 @@ class BuildPipelineExecutor:
             ))
 
             analysis = project_detector.analyze(workspace_dir)
-            package_manager = job_data.get("package_manager") or analysis.packageManager or "npm"
-            build_command = job_data.get("build_command") or analysis.buildCommand or "npm run build"
-            output_directory = job_data.get("output_directory") or analysis.outputDirectory or "dist"
+            package_manager = job_data.get("package_manager") or analysis.packageManager or "none"
+            build_command = job_data.get("build_command")
+            if build_command is None:
+                build_command = analysis.buildCommand
+            output_directory = job_data.get("output_directory")
+            if output_directory is None:
+                output_directory = analysis.outputDirectory or "."
 
             await emit_log(BuildLogEvent(
                 stage=BuildStage.ANALYSIS.value,
@@ -157,7 +171,7 @@ class BuildPipelineExecutor:
                 {"_id": ObjectId(build_id)},
                 {"$set": {
                     "status": BuildStatus.BUILT.value,
-                    "completed_at": datetime.now(timezone.utc).isoformat() + "Z",
+                    "completed_at": utc_now_iso(),
                     "duration_seconds": duration,
                     "exit_code": 0,
                     "artifact_path": artifact_rel_path
@@ -207,7 +221,7 @@ class BuildPipelineExecutor:
 
             await emit_log(BuildLogEvent(
                 stage="diagnosis",
-                level=LogLevel.WARN,
+                level=LogLevel.WARNING,
                 message=f"[DIAGNOSIS: {diagnosis.category}] {diagnosis.summary} -> Fix: {diagnosis.actionable_fix}"
             ))
 
@@ -215,7 +229,7 @@ class BuildPipelineExecutor:
                 {"_id": ObjectId(build_id)},
                 {"$set": {
                     "status": BuildStatus.FAILED.value,
-                    "completed_at": datetime.now(timezone.utc).isoformat() + "Z",
+                    "completed_at": utc_now_iso(),
                     "duration_seconds": duration,
                     "exit_code": getattr(e, "exit_code", 1),
                     "error_message": error_msg,

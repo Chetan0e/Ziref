@@ -8,6 +8,7 @@ import os
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.responses import StreamingResponse, FileResponse
 
+from services.api.core.datetime_util import utc_now_iso
 from services.api.core.config import settings
 from services.api.core.database import get_database
 from services.api.core.security import get_current_user_token
@@ -35,9 +36,9 @@ async def trigger_build(
     if not upload:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload record not found")
 
-    now_str = datetime.now(timezone.utc).isoformat() + "Z"
-    build_command = payload.build_command or project.get("build_command") or "npm run build"
-    output_directory = payload.output_directory or project.get("output_directory") or "dist"
+    now_str = utc_now_iso()
+    build_command = payload.build_command if payload.build_command is not None else project.get("build_command")
+    output_directory = payload.output_directory if payload.output_directory is not None else (project.get("output_directory") or ".")
 
     build_doc = {
         "project_id": project_id,
@@ -90,14 +91,49 @@ async def trigger_build(
         created_at=now_str
     )
 
+@router.get("/projects/{project_id}/builds", response_model=List[BuildResponse])
+async def list_project_builds(
+    project_id: str,
+    token_data: Dict[str, Any] = Depends(get_current_user_token)
+):
+    db = get_database()
+    if not ObjectId.is_valid(project_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid project ID")
+
+    project = await db.projects.find_one({"_id": ObjectId(project_id), "user_id": token_data["sub"]})
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    cursor = db.builds.find({"project_id": project_id}).sort("created_at", -1)
+    results = []
+    async for b in cursor:
+        results.append(BuildResponse(
+            id=str(b["_id"]),
+            project_id=b["project_id"],
+            upload_id=b["upload_id"],
+            status=b["status"],
+            framework=b.get("framework"),
+            build_command=b.get("build_command"),
+            output_directory=b.get("output_directory"),
+            exit_code=b.get("exit_code"),
+            started_at=b.get("started_at"),
+            completed_at=b.get("completed_at"),
+            duration_seconds=b.get("duration_seconds"),
+            error_message=b.get("error_message"),
+            diagnosis=b.get("diagnosis"),
+            created_at=b.get("created_at", "")
+        ))
+    return results
+
 @router.get("/builds/{build_id}", response_model=BuildResponse)
 async def get_build(build_id: str, token_data: Dict[str, Any] = Depends(get_current_user_token)):
     db = get_database()
-    if not ObjectId.is_valid(build_id):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid build ID")
-
-    b = await db.builds.find_one({"_id": ObjectId(build_id), "user_id": token_data["sub"]})
+    b = None
+    if ObjectId.is_valid(build_id):
+        b = await db.builds.find_one({"_id": ObjectId(build_id)})
     if not b:
+        b = await db.builds.find_one({"_id": build_id})
+    if not b or (b.get("user_id") and b.get("user_id") != token_data["sub"]):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Build not found")
 
     return BuildResponse(
@@ -154,7 +190,7 @@ async def cancel_build(build_id: str, token_data: Dict[str, Any] = Depends(get_c
     if b.get("status") in [BuildStatus.BUILT.value, BuildStatus.FAILED.value, BuildStatus.CANCELLED.value]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Build is already {b.get('status')}")
 
-    now_str = datetime.now(timezone.utc).isoformat() + "Z"
+    now_str = utc_now_iso()
     await db.builds.update_one(
         {"_id": ObjectId(build_id)},
         {"$set": {
@@ -182,7 +218,7 @@ async def retry_build(build_id: str, token_data: Dict[str, Any] = Depends(get_cu
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Build not found")
 
     project = await db.projects.find_one({"_id": ObjectId(b["project_id"])})
-    now_str = datetime.now(timezone.utc).isoformat() + "Z"
+    now_str = utc_now_iso()
 
     new_build_doc = {
         "project_id": b["project_id"],

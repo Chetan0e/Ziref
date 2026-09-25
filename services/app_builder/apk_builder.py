@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any
 from bson import ObjectId
 
+from services.api.core.datetime_util import utc_now_iso
 from services.api.core.config import settings
 from services.api.core.database import get_database
 from services.api.core.models import MobileAppStatus, LogLevel, BuildLogEvent
@@ -42,13 +43,22 @@ class MobileBuildPipeline:
                 {"_id": ObjectId(mobile_build_id)},
                 {"$set": {
                     "status": MobileAppStatus.APP_CONFIGURING.value,
-                    "started_at": datetime.now(timezone.utc).isoformat() + "Z"
+                    "started_at": utc_now_iso()
                 }}
             )
             await emit_log("init", f"Initializing mobile build pipeline for App ID {mobile_app_id}")
 
-            # 2. Retrieve Mobile App record
-            app_doc = await db.mobile_apps.find_one({"_id": ObjectId(mobile_app_id)})
+            # 2. Retrieve Mobile App record with retry resilience
+            app_doc = None
+            for _ in range(5):
+                if ObjectId.is_valid(mobile_app_id):
+                    app_doc = await db.mobile_apps.find_one({"_id": ObjectId(mobile_app_id)})
+                if not app_doc:
+                    app_doc = await db.mobile_apps.find_one({"_id": mobile_app_id})
+                if app_doc:
+                    break
+                await asyncio.sleep(0.5)
+
             if not app_doc:
                 raise Exception(f"Mobile app configuration not found: {mobile_app_id}")
 
@@ -102,7 +112,7 @@ class MobileBuildPipeline:
             await emit_log("completed", f"Android APK and project source successfully generated in {duration}s!")
 
             # 6. Mark APP_READY
-            now_str = datetime.now(timezone.utc).isoformat() + "Z"
+            now_str = utc_now_iso()
             await db.mobile_builds.update_one(
                 {"_id": ObjectId(mobile_build_id)},
                 {"$set": {
@@ -124,7 +134,7 @@ class MobileBuildPipeline:
                     "status": MobileAppStatus.APP_FAILED.value,
                     "error_message": str(e),
                     "duration_seconds": duration,
-                    "completed_at": datetime.now(timezone.utc).isoformat() + "Z"
+                    "completed_at": utc_now_iso()
                 }}
             )
         finally:

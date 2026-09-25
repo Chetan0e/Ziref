@@ -1,10 +1,13 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { ThemeProvider } from '@/lib/theme';
+import { AuthProvider } from '@/lib/auth';
+import { ToastProvider } from '@/lib/toast';
 
 export const metadata: Metadata = {
-  title: 'Ziref — From Code to Product',
+  title: 'Ziref — Developer Infrastructure Platform',
   description:
-    'Upload your project. Ziref detects the stack, builds it in an isolated environment, deploys it instantly, and prepares it for mobile.',
+    'Upload your project. Ziref analyzes the architecture, builds it in an isolated sandbox, deploys it to the edge, and packages it for mobile.',
   icons: {
     icon: '/ziref-logo.svg',
     shortcut: '/ziref-logo.svg',
@@ -30,7 +33,9 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{
             __html: `
               try {
-                if (localStorage.getItem('ziref-theme') === 'dark') {
+                var stored = localStorage.getItem('ziref-theme');
+                var isDark = stored === 'dark' || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches) || (stored === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+                if (isDark) {
                   document.documentElement.classList.add('dark');
                 } else {
                   document.documentElement.classList.remove('dark');
@@ -40,8 +45,14 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="min-h-screen antialiased">
-        {children}
+      <body className="min-h-screen antialiased bg-[var(--background)] text-[var(--text-primary)]">
+        <ThemeProvider>
+          <AuthProvider>
+            <ToastProvider>
+              {children}
+            </ToastProvider>
+          </AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

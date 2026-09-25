@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any
 from pydantic import BaseModel, Field
 
+from services.api.core.datetime_util import utc_now_iso
 from services.api.core.config import settings
 from services.api.core.database import get_database
 from services.api.core.security import get_current_user_token
@@ -75,7 +76,7 @@ async def add_project_domain(
             )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Domain already configured on another Ziref project.")
 
-    now_str = datetime.now(timezone.utc).isoformat() + "Z"
+    now_str = utc_now_iso()
     doc = {
         "project_id": project_id,
         "user_id": token_data["sub"],
@@ -108,7 +109,7 @@ async def verify_domain(
     if not domain:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Domain not found")
 
-    now_str = datetime.now(timezone.utc).isoformat() + "Z"
+    now_str = utc_now_iso()
     await db.domains.update_one(
         {"_id": ObjectId(domain_id)},
         {"$set": {

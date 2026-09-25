@@ -2,8 +2,10 @@
 
 import React, { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { api } from '@/lib/api';
+import Link from 'next/link';
+import { api, ApiError } from '@/lib/api';
 import { AnalysisResult } from '@ziref/types';
+import { useToast } from '@/lib/toast';
 import {
   UploadCloud,
   FileArchive,
@@ -11,17 +13,22 @@ import {
   AlertCircle,
   Loader2,
   ArrowRight,
+  ArrowLeft,
   Settings,
-  Sparkles,
   GitBranch,
-  FolderGit2
+  FolderGit2,
+  Terminal,
+  Layers,
+  Sparkles,
+  Info,
 } from 'lucide-react';
 
 export default function NewProjectPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { addToast } = useToast();
 
-  const [creationMode, setCreationMode] = useState<'upload' | 'git' | 'demo'>('upload');
+  const [creationMode, setCreationMode] = useState<'upload' | 'git'>('upload');
 
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
@@ -65,7 +72,7 @@ export default function NewProjectPage() {
           setName(droppedFile.name.replace(/\.zip$/i, ''));
         }
       } else {
-        setError('Only .zip archive files are supported.');
+        setError('Only .zip source archive files are supported.');
       }
     }
   };
@@ -73,9 +80,13 @@ export default function NewProjectPage() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const selected = e.target.files[0];
-      setFile(selected);
-      if (!name) {
-        setName(selected.name.replace(/\.zip$/i, ''));
+      if (selected.name.endsWith('.zip')) {
+        setFile(selected);
+        if (!name) {
+          setName(selected.name.replace(/\.zip$/i, ''));
+        }
+      } else {
+        setError('Only .zip source archive files are supported.');
       }
     }
   };
@@ -106,13 +117,24 @@ export default function NewProjectPage() {
       setUploadId(uploadRes.id);
       if (uploadRes.analysis) {
         setAnalysis(uploadRes.analysis);
-        setBuildCommand(uploadRes.analysis.buildCommand || 'npm run build');
-        setOutputDirectory(uploadRes.analysis.outputDirectory || 'dist');
+        setBuildCommand(uploadRes.analysis.buildCommand || '');
+        setOutputDirectory(uploadRes.analysis.outputDirectory || '.');
       }
 
       setUploadProgress(null);
+      addToast({
+        title: 'Project analyzed',
+        description: `Identified ${uploadRes.analysis?.framework || 'detected'} project structure.`,
+        type: 'success',
+      });
     } catch (err: any) {
-      setError(err.message || 'Failed to analyze project archive.');
+      const msg = err.message || 'Failed to analyze project archive.';
+      setError(msg);
+      addToast({
+        title: 'Upload failed',
+        description: msg,
+        type: 'error',
+      });
     } finally {
       setIsUploading(false);
     }
@@ -128,13 +150,24 @@ export default function NewProjectPage() {
     const projName = name.trim() || gitUrl.split('/').pop()?.replace('.git', '') || 'git-project';
     setError(null);
     setIsUploading(true);
-    setUploadProgress('Cloning and analyzing Git repository...');
+    setUploadProgress('Cloning repository and inspecting build manifest...');
 
     try {
       const res = await api.importGitProject(projName, gitUrl.trim(), gitBranch.trim() || 'main', slug.trim() || undefined);
+      addToast({
+        title: 'Git import initialized',
+        description: 'Cloning repository and initiating pipeline.',
+        type: 'success',
+      });
       router.push(`/dashboard/projects/${res.project_id}`);
     } catch (err: any) {
-      setError(err.message || 'Failed to import Git repository.');
+      const msg = err.message || 'Failed to import Git repository.';
+      setError(msg);
+      addToast({
+        title: 'Git import failed',
+        description: msg,
+        type: 'error',
+      });
       setIsUploading(false);
     }
   };
@@ -143,100 +176,103 @@ export default function NewProjectPage() {
     if (!projectId || !uploadId) return;
 
     setIsUploading(true);
-    setUploadProgress('Queueing build worker...');
+    setUploadProgress('Queueing isolated sandbox worker...');
 
     try {
       await api.triggerBuild(projectId, uploadId, buildCommand, outputDirectory);
+      addToast({
+        title: 'Build scheduled',
+        description: 'Build job queued on isolated worker.',
+        type: 'success',
+      });
       router.push(`/dashboard/projects/${projectId}`);
     } catch (err: any) {
-      setError(err.message || 'Failed to start build.');
+      const msg = err.message || 'Failed to start build.';
+      setError(msg);
+      addToast({
+        title: 'Build trigger failed',
+        description: msg,
+        type: 'error',
+      });
       setIsUploading(false);
     }
   };
 
   return (
-    <div className="max-w-3xl mx-auto space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-white">Create New Project</h1>
-        <p className="text-xs text-zinc-400 mt-1">Deploy web applications to production and mobile in minutes</p>
+    <div className="max-w-3xl mx-auto space-y-6">
+      {/* Top Breadcrumb & Heading */}
+      <div className="flex items-center justify-between pb-4 border-b border-[var(--border)]">
+        <div>
+          <Link
+            href="/dashboard/projects"
+            className="inline-flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] mb-1 transition-colors"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" /> Back to Projects
+          </Link>
+          <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">
+            Create New Project
+          </h1>
+          <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+            Deploy web applications and compile mobile packages in isolated environments
+          </p>
+        </div>
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 p-4 rounded-xl bg-rose-950/50 border border-rose-900 text-rose-300 text-xs">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      {/* Method Selector Tabs */}
-      {!analysis && (
-        <div className="flex p-1 bg-zinc-900 rounded-xl border border-zinc-800">
-          <button
-            onClick={() => setCreationMode('upload')}
-            className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-semibold rounded-lg transition-colors ${
-              creationMode === 'upload' ? 'bg-zinc-800 text-white shadow' : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <UploadCloud className="w-4 h-4" /> Upload ZIP
-          </button>
-          <button
-            onClick={() => setCreationMode('git')}
-            className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-semibold rounded-lg transition-colors ${
-              creationMode === 'git' ? 'bg-zinc-800 text-white shadow' : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <FolderGit2 className="w-4 h-4" /> Git Repository
-          </button>
-          <button
-            onClick={() => setCreationMode('demo')}
-            className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-semibold rounded-lg transition-colors ${
-              creationMode === 'demo' ? 'bg-zinc-800 text-amber-400 shadow' : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <Sparkles className="w-4 h-4" /> 1-Click React Demo
-          </button>
-        </div>
-      )}
-
-      {/* 1-Click Demo Option */}
-      {!analysis && creationMode === 'demo' && (
-        <div className="p-6 rounded-xl border border-amber-900/60 bg-amber-950/20 space-y-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
-              <Sparkles className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-sm font-semibold text-white">Bundled React 18 + Vite Sample App</h3>
-              <p className="text-xs text-zinc-400">Instantly deploy a production-grade TypeScript React app with hot reloading and counter widget.</p>
-            </div>
+        <div className="flex items-start gap-3 p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-500 text-xs">
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <span className="font-semibold block mb-0.5">Deployment Configuration Error</span>
+            <span>{error}</span>
           </div>
+        </div>
+      )}
+
+      {/* Creation Mode Tabs */}
+      {!analysis && (
+        <div className="flex p-1 bg-[var(--surface-muted)] rounded-xl border border-[var(--border)]">
           <button
-            onClick={async () => {
-              setIsUploading(true);
-              setUploadProgress('Setting up demo project...');
-              try {
-                const res = await api.createDemoProject();
-                router.push(`/dashboard/projects/${res.project_id}`);
-              } catch (e: any) {
-                setError(e.message);
-                setIsUploading(false);
-              }
+            onClick={() => {
+              setCreationMode('upload');
+              setError(null);
             }}
-            disabled={isUploading}
-            className="w-full px-5 py-2.5 rounded-lg bg-amber-500 text-black text-xs font-bold hover:bg-amber-400 transition-colors shadow-lg flex items-center justify-center gap-2"
+            className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-semibold rounded-lg transition-colors ${
+              creationMode === 'upload'
+                ? 'bg-[var(--surface)] text-[var(--text-primary)] shadow-sm border border-[var(--border)]'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
           >
-            {isUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-            <span>Deploy Sample Project Now</span>
+            <UploadCloud className="w-4 h-4 text-sky-500" />
+            <span>Upload ZIP Archive</span>
+          </button>
+          <button
+            onClick={() => {
+              setCreationMode('git');
+              setError(null);
+            }}
+            className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-semibold rounded-lg transition-colors ${
+              creationMode === 'git'
+                ? 'bg-[var(--surface)] text-[var(--text-primary)] shadow-sm border border-[var(--border)]'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            <FolderGit2 className="w-4 h-4 text-purple-500" />
+            <span>Git Repository</span>
           </button>
         </div>
       )}
 
-      {/* Git Repository Import Option */}
+      {/* Method 1: Git Repository Import */}
       {!analysis && creationMode === 'git' && (
-        <form onSubmit={handleGitImport} className="space-y-6 bg-zinc-950 border border-zinc-800 rounded-xl p-6 shadow-xl">
+        <form
+          onSubmit={handleGitImport}
+          className="space-y-6 bg-[var(--surface)] border border-[var(--border)] rounded-xl p-6 shadow-sm"
+        >
           <div className="space-y-4">
             <div>
-              <label className="block text-xs font-medium text-zinc-300 mb-1.5">Git Repository URL</label>
+              <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                Git Repository URL
+              </label>
               <input
                 type="url"
                 required
@@ -248,48 +284,68 @@ export default function NewProjectPage() {
                     if (extracted) setName(extracted);
                   }
                 }}
-                placeholder="https://github.com/vitejs/vite or public repo URL"
-                className="w-full px-3.5 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-white placeholder-zinc-500 font-mono focus:outline-none focus:border-sky-500"
+                placeholder="https://github.com/org/repo or public git url"
+                className="w-full px-3.5 py-2 bg-[var(--surface-muted)] border border-[var(--border)] rounded-lg text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] font-mono focus:outline-none focus:border-sky-500 transition-colors"
               />
+              <p className="text-[11px] text-[var(--text-muted)] mt-1">
+                Supports public HTTPS repository links.
+              </p>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-medium text-zinc-300 mb-1.5">Project Name</label>
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                  Project Name
+                </label>
                 <input
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. my-vite-app"
-                  className="w-full px-3.5 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-sky-500"
+                  placeholder="e.g. my-app"
+                  className="w-full px-3.5 py-2 bg-[var(--surface-muted)] border border-[var(--border)] rounded-lg text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-sky-500 transition-colors"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-zinc-300 mb-1.5">Branch</label>
-                <div className="flex items-center gap-2 px-3 py-2 bg-zinc-900 border border-zinc-800 rounded-lg">
-                  <GitBranch className="w-4 h-4 text-zinc-500 shrink-0" />
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                  Branch
+                </label>
+                <div className="flex items-center gap-2 px-3 py-2 bg-[var(--surface-muted)] border border-[var(--border)] rounded-lg">
+                  <GitBranch className="w-4 h-4 text-[var(--text-muted)] shrink-0" />
                   <input
                     type="text"
                     value={gitBranch}
                     onChange={(e) => setGitBranch(e.target.value)}
                     placeholder="main"
-                    className="w-full bg-transparent text-xs text-white placeholder-zinc-500 focus:outline-none font-mono"
+                    className="w-full bg-transparent text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none font-mono"
                   />
                 </div>
               </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                Custom Slug (Optional)
+              </label>
+              <input
+                type="text"
+                value={slug}
+                onChange={(e) => setSlug(e.target.value)}
+                placeholder="e.g. my-app"
+                className="w-full px-3.5 py-2 bg-[var(--surface-muted)] border border-[var(--border)] rounded-lg text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-sky-500 font-mono transition-colors"
+              />
             </div>
           </div>
 
           <button
             type="submit"
             disabled={isUploading || !gitUrl}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-sky-500 text-black font-semibold text-xs hover:bg-sky-400 transition-colors disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-sky-500 text-black font-semibold text-xs hover:bg-sky-400 transition-colors disabled:opacity-50 shadow-sm"
           >
             {isUploading ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                <span>{uploadProgress || 'Cloning repository...'}</span>
+                <span>{uploadProgress || 'Cloning and deploying...'}</span>
               </>
             ) : (
               <>
@@ -301,36 +357,42 @@ export default function NewProjectPage() {
         </form>
       )}
 
-      {/* ZIP Upload Option */}
+      {/* Method 2: ZIP Upload */}
       {!analysis && creationMode === 'upload' && (
-        <div className="space-y-6 bg-zinc-950 border border-zinc-800 rounded-xl p-6 shadow-xl">
+        <div className="space-y-6 bg-[var(--surface)] border border-[var(--border)] rounded-xl p-6 shadow-sm">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-medium text-zinc-300 mb-1.5">Project Name</label>
+              <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                Project Name
+              </label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. my-awesome-app"
-                className="w-full px-3.5 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-sky-500"
+                placeholder="e.g. ecommerce-frontend"
+                className="w-full px-3.5 py-2 bg-[var(--surface-muted)] border border-[var(--border)] rounded-lg text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-sky-500 transition-colors"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-zinc-300 mb-1.5">Custom Slug (Optional)</label>
+              <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                Custom Subdomain / Slug (Optional)
+              </label>
               <input
                 type="text"
                 value={slug}
                 onChange={(e) => setSlug(e.target.value)}
-                placeholder="e.g. my-awesome-app"
-                className="w-full px-3.5 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-sky-500 font-mono"
+                placeholder="e.g. ecommerce-store"
+                className="w-full px-3.5 py-2 bg-[var(--surface-muted)] border border-[var(--border)] rounded-lg text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-sky-500 font-mono transition-colors"
               />
             </div>
           </div>
 
-          {/* Drag & Drop Upload Box */}
+          {/* Drag & Drop Upload Zone */}
           <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1.5">Project Source Archive (.ZIP)</label>
+            <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+              Source Code Archive (.ZIP)
+            </label>
             <div
               onDragEnter={handleDrag}
               onDragLeave={handleDrag}
@@ -338,7 +400,9 @@ export default function NewProjectPage() {
               onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
               className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
-                dragActive ? 'border-sky-500 bg-sky-950/20' : 'border-zinc-800 hover:border-zinc-700 bg-zinc-900/40'
+                dragActive
+                  ? 'border-sky-500 bg-sky-500/10'
+                  : 'border-[var(--border)] hover:border-zinc-500 bg-[var(--surface-muted)]'
               }`}
             >
               <input
@@ -348,26 +412,39 @@ export default function NewProjectPage() {
                 onChange={handleFileChange}
                 className="hidden"
               />
-              <UploadCloud className="w-10 h-10 text-zinc-500 mx-auto mb-3" />
+              <UploadCloud className="w-10 h-10 text-[var(--text-muted)] mx-auto mb-3" />
               {file ? (
-                <div className="flex items-center justify-center gap-2 text-sky-400 font-medium text-xs">
+                <div className="flex items-center justify-center gap-2 text-sky-500 font-medium text-xs">
                   <FileArchive className="w-4 h-4" />
                   <span>{file.name}</span>
-                  <span className="text-zinc-500">({(file.size / (1024 * 1024)).toFixed(2)} MB)</span>
+                  <span className="text-[var(--text-muted)] font-mono">
+                    ({(file.size / (1024 * 1024)).toFixed(2)} MB)
+                  </span>
                 </div>
               ) : (
                 <>
-                  <p className="text-xs text-zinc-300 font-medium">Click to upload or drag & drop project ZIP</p>
-                  <p className="text-[11px] text-zinc-500 mt-1">Supports Vite, React, Next.js, Vue, Angular, Node.js, and static HTML (up to 50MB)</p>
+                  <p className="text-xs text-[var(--text-primary)] font-medium">
+                    Click to select or drag & drop your project ZIP file
+                  </p>
+                  <p className="text-[11px] text-[var(--text-secondary)] mt-1">
+                    Supports Vite, React, Next.js, Vue, Angular, Node.js, and static HTML (max 50MB)
+                  </p>
                 </>
               )}
             </div>
           </div>
 
+          <div className="flex items-center gap-2 p-3 rounded-lg bg-[var(--surface-muted)] border border-[var(--border)] text-xs text-[var(--text-secondary)]">
+            <Info className="w-4 h-4 text-sky-500 shrink-0" />
+            <span>
+              Ziref automatically inspects your <code>package.json</code> or index files, detects framework and dependencies, and provisions the optimal build runtime.
+            </span>
+          </div>
+
           <button
             onClick={handleUploadAndAnalyze}
             disabled={isUploading || !file || !name}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-sky-500 text-black font-semibold text-xs hover:bg-sky-400 transition-colors disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-sky-500 text-black font-semibold text-xs hover:bg-sky-400 transition-colors disabled:opacity-50 shadow-sm"
           >
             {isUploading ? (
               <>
@@ -376,7 +453,7 @@ export default function NewProjectPage() {
               </>
             ) : (
               <>
-                <span>Analyze Project</span>
+                <span>Upload & Analyze Project</span>
                 <ArrowRight className="w-4 h-4" />
               </>
             )}
@@ -386,56 +463,68 @@ export default function NewProjectPage() {
 
       {/* Step 2: Analyzer Review & Build Launch (For ZIP Upload Flow) */}
       {analysis && (
-        <div className="space-y-6 bg-zinc-950 border border-zinc-800 rounded-xl p-6 shadow-xl">
-          <div className="flex items-center gap-2 text-emerald-400 font-semibold text-sm">
+        <div className="space-y-6 bg-[var(--surface)] border border-[var(--border)] rounded-xl p-6 shadow-sm">
+          <div className="flex items-center gap-2 text-emerald-500 font-semibold text-sm">
             <CheckCircle2 className="w-5 h-5" />
-            <span>Project Detected Successfully</span>
+            <span>Stack Analyzed & Verified</span>
           </div>
 
           {/* Analysis Summary Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono text-xs">
-            <div className="p-3 bg-zinc-900 rounded-lg border border-zinc-800">
-              <span className="text-zinc-500 text-[10px] block">FRAMEWORK</span>
-              <span className="font-bold text-white capitalize">{analysis.framework}</span>
+            <div className="p-3 bg-[var(--surface-muted)] rounded-lg border border-[var(--border)]">
+              <span className="text-[var(--text-muted)] text-[10px] block">FRAMEWORK</span>
+              <span className="font-bold text-[var(--text-primary)] capitalize">
+                {analysis.framework}
+              </span>
             </div>
-            <div className="p-3 bg-zinc-900 rounded-lg border border-zinc-800">
-              <span className="text-zinc-500 text-[10px] block">LANGUAGE</span>
-              <span className="font-bold text-white capitalize">{analysis.language}</span>
+            <div className="p-3 bg-[var(--surface-muted)] rounded-lg border border-[var(--border)]">
+              <span className="text-[var(--text-muted)] text-[10px] block">LANGUAGE</span>
+              <span className="font-bold text-[var(--text-primary)] capitalize">
+                {analysis.language}
+              </span>
             </div>
-            <div className="p-3 bg-zinc-900 rounded-lg border border-zinc-800">
-              <span className="text-zinc-500 text-[10px] block">PACKAGE MANAGER</span>
-              <span className="font-bold text-white uppercase">{analysis.packageManager}</span>
+            <div className="p-3 bg-[var(--surface-muted)] rounded-lg border border-[var(--border)]">
+              <span className="text-[var(--text-muted)] text-[10px] block">PACKAGE MANAGER</span>
+              <span className="font-bold text-[var(--text-primary)] uppercase">
+                {analysis.packageManager}
+              </span>
             </div>
-            <div className="p-3 bg-zinc-900 rounded-lg border border-zinc-800">
-              <span className="text-zinc-500 text-[10px] block">RUNTIME</span>
-              <span className="font-bold text-sky-400 capitalize">{analysis.runtime}</span>
+            <div className="p-3 bg-[var(--surface-muted)] rounded-lg border border-[var(--border)]">
+              <span className="text-[var(--text-muted)] text-[10px] block">RUNTIME</span>
+              <span className="font-bold text-sky-500 capitalize">{analysis.runtime}</span>
             </div>
           </div>
 
           {/* Overrides Configuration */}
-          <div className="space-y-3 pt-4 border-t border-zinc-800">
-            <div className="flex items-center gap-2 text-xs font-semibold text-zinc-300">
-              <Settings className="w-4 h-4 text-zinc-500" />
-              <span>Build Configuration</span>
+          <div className="space-y-3 pt-4 border-t border-[var(--border)]">
+            <div className="flex items-center gap-2 text-xs font-semibold text-[var(--text-primary)]">
+              <Settings className="w-4 h-4 text-sky-500" />
+              <span>Build & Output Configuration</span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-medium text-zinc-400 mb-1">Build Command</label>
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                  Build Command (Optional for static apps)
+                </label>
                 <input
                   type="text"
                   value={buildCommand}
+                  placeholder="None (Static application)"
                   onChange={(e) => setBuildCommand(e.target.value)}
-                  className="w-full px-3 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-white font-mono"
+                  className="w-full px-3 py-2 bg-[var(--surface-muted)] border border-[var(--border)] rounded-lg text-xs text-[var(--text-primary)] font-mono focus:outline-none focus:border-sky-500 transition-colors"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-zinc-400 mb-1">Output Directory</label>
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                  Output Directory
+                </label>
                 <input
                   type="text"
                   value={outputDirectory}
+                  placeholder="."
                   onChange={(e) => setOutputDirectory(e.target.value)}
-                  className="w-full px-3 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-white font-mono"
+                  className="w-full px-3 py-2 bg-[var(--surface-muted)] border border-[var(--border)] rounded-lg text-xs text-[var(--text-primary)] font-mono focus:outline-none focus:border-sky-500 transition-colors"
                 />
               </div>
             </div>
@@ -444,24 +533,24 @@ export default function NewProjectPage() {
           <div className="pt-4 flex items-center justify-between gap-4">
             <button
               onClick={() => setAnalysis(null)}
-              className="px-4 py-2 rounded-lg border border-zinc-800 text-zinc-400 hover:text-white text-xs"
+              className="px-4 py-2 rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-xs transition-colors"
             >
               Back
             </button>
             <button
               onClick={handleStartDeployment}
               disabled={isUploading}
-              className="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-sky-500 text-black font-semibold text-xs hover:bg-sky-400 transition-colors shadow-lg"
+              className="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-sky-500 text-black font-semibold text-xs hover:bg-sky-400 transition-colors shadow-sm disabled:opacity-50"
             >
               {isUploading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Starting Sandbox Build...</span>
+                  <span>Queueing Sandbox Build...</span>
                 </>
               ) : (
                 <>
                   <Sparkles className="w-4 h-4" />
-                  <span>Deploy Project</span>
+                  <span>Deploy to Production</span>
                 </>
               )}
             </button>

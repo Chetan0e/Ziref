@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from bson import ObjectId
 
+from services.api.core.datetime_util import utc_now_iso
 from services.api.core.config import settings
 from services.api.core.database import get_database
 from services.api.core.models import DeploymentStatus, ProjectStatus
@@ -29,7 +30,7 @@ class DeployerService:
         slug = project["slug"]
         subdomain = slug
         public_url = f"http://{slug}.{settings.BASE_DOMAIN}"
-        fallback_url = f"http://{settings.BASE_DOMAIN}/sites/{slug}/"
+        fallback_url = f"{settings.API_PUBLIC_URL}/sites/{slug}/"
 
         # Create Deployment Record
         deployment_doc = {
@@ -39,9 +40,10 @@ class DeployerService:
             "status": DeploymentStatus.DEPLOYING.value,
             "subdomain": subdomain,
             "url": public_url,
+            "preview_url": fallback_url,
             "runtime": "static",
             "artifact_path": artifact_path,
-            "created_at": datetime.now(timezone.utc).isoformat() + "Z",
+            "created_at": utc_now_iso(),
             "completed_at": None
         }
 
@@ -63,11 +65,33 @@ class DeployerService:
                 except TypeError:
                     tar.extractall(path=target_deploy_dir)
 
+            # If target_deploy_dir has only 1 directory and no index.html at root, unwrap it
+            if not os.path.exists(os.path.join(target_deploy_dir, "index.html")):
+                entries = [e for e in os.listdir(target_deploy_dir) if not e.startswith(".")]
+                if len(entries) == 1:
+                    single_sub = os.path.join(target_deploy_dir, entries[0])
+                    if os.path.isdir(single_sub):
+                        for item in os.listdir(single_sub):
+                            src = os.path.join(single_sub, item)
+                            dst = os.path.join(target_deploy_dir, item)
+                            if not os.path.exists(dst):
+                                shutil.move(src, dst)
+                        shutil.rmtree(single_sub, ignore_errors=True)
+
+            # Mirror deployment to slug directory for direct filesystem routing resiliency
+            slug_deploy_dir = os.path.join(settings.STORAGE_PATH, "deployments", slug)
+            try:
+                if os.path.exists(slug_deploy_dir):
+                    shutil.rmtree(slug_deploy_dir, ignore_errors=True)
+                shutil.copytree(target_deploy_dir, slug_deploy_dir, dirs_exist_ok=True)
+            except Exception as e:
+                logger.warning(f"Could not mirror deployment to slug directory {slug}: {e}")
+
             # Update routing cache in Redis
             await set_project_routing(slug, deployment_id, "static")
 
             # Mark deployment as READY
-            now_str = datetime.now(timezone.utc).isoformat() + "Z"
+            now_str = utc_now_iso()
             await db.deployments.update_one(
                 {"_id": ObjectId(deployment_id)},
                 {"$set": {
@@ -83,6 +107,7 @@ class DeployerService:
                     "status": ProjectStatus.DEPLOYED.value,
                     "active_deployment_id": deployment_id,
                     "active_url": public_url,
+                    "preview_url": fallback_url,
                     "updated_at": now_str
                 }}
             )
@@ -109,7 +134,7 @@ class DeployerService:
                 {"_id": ObjectId(deployment_id)},
                 {"$set": {
                     "status": DeploymentStatus.FAILED.value,
-                    "completed_at": datetime.now(timezone.utc).isoformat() + "Z"
+                    "completed_at": utc_now_iso()
                 }}
             )
             await db.projects.update_one(
@@ -148,7 +173,7 @@ class DeployerService:
             return False
 
         slug = project["slug"]
-        now_str = datetime.now(timezone.utc).isoformat() + "Z"
+        now_str = utc_now_iso()
 
         # Update Redis routing cache
         await set_project_routing(slug, target_deployment_id, "static")

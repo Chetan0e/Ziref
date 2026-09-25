@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import logging
 from datetime import datetime, timezone
 from bson import ObjectId
 from typing import List, Dict, Any, Optional
@@ -8,6 +9,9 @@ from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.responses import StreamingResponse, FileResponse
 
+logger = logging.getLogger("ziref.apps")
+
+from services.api.core.datetime_util import utc_now_iso
 from services.api.core.config import settings
 from services.api.core.database import get_database
 from services.api.core.security import get_current_user_token
@@ -54,7 +58,7 @@ async def create_mobile_app(
 
     slug = project["slug"]
     website_url = project.get("active_url") or f"http://{slug}.{settings.BASE_DOMAIN}"
-    now_str = datetime.now(timezone.utc).isoformat() + "Z"
+    now_str = utc_now_iso()
 
     doc = {
         "project_id": project_id,
@@ -98,7 +102,7 @@ async def trigger_mobile_build(app_id: str, token_data: Dict[str, Any] = Depends
     if not app_doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mobile app config not found")
 
-    now_str = datetime.now(timezone.utc).isoformat() + "Z"
+    now_str = utc_now_iso()
     build_doc = {
         "mobile_app_id": app_id,
         "project_id": app_doc["project_id"],
@@ -135,11 +139,12 @@ async def trigger_mobile_build(app_id: str, token_data: Dict[str, Any] = Depends
 @router.get("/mobile-builds/{build_id}", response_model=MobileBuildResponse)
 async def get_mobile_build(build_id: str, token_data: Dict[str, Any] = Depends(get_current_user_token)):
     db = get_database()
-    if not ObjectId.is_valid(build_id):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid build ID")
-
-    b = await db.mobile_builds.find_one({"_id": ObjectId(build_id), "user_id": token_data["sub"]})
+    b = None
+    if ObjectId.is_valid(build_id):
+        b = await db.mobile_builds.find_one({"_id": ObjectId(build_id)})
     if not b:
+        b = await db.mobile_builds.find_one({"_id": build_id})
+    if not b or (b.get("user_id") and b.get("user_id") != token_data["sub"]):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Build not found")
 
     apk_dl = f"/api/v1/mobile-builds/{build_id}/download/apk" if b.get("apk_artifact_id") else None
@@ -184,24 +189,34 @@ async def stream_mobile_build_logs(build_id: str):
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-@router.get("/mobile-builds/{build_id}/download/{artifact_type}")
-async def download_mobile_artifact(build_id: str, artifact_type: str):
+@router.api_route("/mobile-builds/{build_id}/download", methods=["GET", "HEAD"])
+@router.api_route("/mobile-builds/{build_id}/download/{artifact_type}", methods=["GET", "HEAD"])
+async def download_mobile_artifact(build_id: str, artifact_type: str = "apk"):
     db = get_database()
-    if not ObjectId.is_valid(build_id):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid ID")
-
-    b = await db.mobile_builds.find_one({"_id": ObjectId(build_id)})
+    b = None
+    if ObjectId.is_valid(build_id):
+        b = await db.mobile_builds.find_one({"_id": ObjectId(build_id)})
     if not b:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mobile build not found")
+        b = await db.mobile_builds.find_one({"_id": build_id})
 
-    rel_path = b.get("apk_artifact_id") if artifact_type == "apk" else b.get("source_artifact_id")
-    if not rel_path:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not ready yet")
+    is_apk = artifact_type.lower() in ["apk", "default", ""]
+    expected_filename = f"app-debug-{build_id}.apk" if is_apk else f"app-source-{build_id}.zip"
+    direct_disk_path = os.path.normpath(os.path.join(settings.STORAGE_PATH, "mobile", expected_filename))
 
-    abs_path = os.path.join(settings.STORAGE_PATH, rel_path)
-    if not os.path.exists(abs_path):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File missing on disk")
+    abs_path = None
+    if b:
+        rel_path = b.get("apk_artifact_id") if is_apk else b.get("source_artifact_id")
+        if rel_path:
+            candidate = os.path.normpath(os.path.join(settings.STORAGE_PATH, rel_path))
+            if os.path.exists(candidate):
+                abs_path = candidate
+
+    if not abs_path and os.path.exists(direct_disk_path):
+        abs_path = direct_disk_path
+
+    if not abs_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact file not found")
 
     filename = os.path.basename(abs_path)
-    media_type = "application/vnd.android.package-archive" if artifact_type == "apk" else "application/zip"
+    media_type = "application/vnd.android.package-archive" if is_apk else "application/zip"
     return FileResponse(abs_path, media_type=media_type, filename=filename)

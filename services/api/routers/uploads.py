@@ -6,6 +6,7 @@ from bson import ObjectId
 from typing import Dict, Any
 
 from fastapi import APIRouter, HTTPException, status, UploadFile, File, Depends
+from services.api.core.datetime_util import utc_now_iso
 from services.api.core.config import settings
 from services.api.core.database import get_database
 from services.api.core.security import get_current_user_token
@@ -63,7 +64,7 @@ async def upload_project_archive(
         success, msg, files = archive_validator.validate_and_extract(storage_abs_path, analysis_dir)
         analysis = project_detector.analyze(analysis_dir)
 
-        now_str = datetime.now(timezone.utc).isoformat() + "Z"
+        now_str = utc_now_iso()
 
         # Update Project record with detected framework info
         await db.projects.update_one(
