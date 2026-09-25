@@ -1,429 +1,532 @@
 <div align="center">
 
-<img src="docs/assets/ziref-logo.svg" alt="Ziref Brandmark" width="96" height="96" />
+<img src="docs/assets/ziref-logo.svg" alt="Ziref" width="80" height="80" />
 
-# ZIREF
+<br />
+<br />
 
-### *Developer Infrastructure, Continuous Deployment & Web-to-Mobile Platform*
+# Ziref
 
-**"One project in, multiple production targets out."**
+**Developer Infrastructure · Continuous Deployment · Web-to-Mobile Platform**
 
-[![License](https://img.shields.io/badge/license-MIT-18181b?style=flat-square)](LICENSE)
-[![Architecture](https://img.shields.io/badge/architecture-modular%20monorepo-0284c7?style=flat-square)](docs/architecture/ARCHITECTURE.md)
-[![Status](https://img.shields.io/badge/status-production--ready-10b981?style=flat-square)](tests)
-[![Tests](https://img.shields.io/badge/tests-35%20passing-38bdf8?style=flat-square)](tests)
-[![CLI](https://img.shields.io/badge/cli-ziref--v1.0.0-6366f1?style=flat-square)](packages/cli)
+<br />
 
-<p align="center">
-  <a href="#-overview">Overview</a> •
-  <a href="#-core-capabilities">Capabilities</a> •
-  <a href="#-system-architecture">Architecture</a> •
-  <a href="#-monorepo-layout">Monorepo</a> •
-  <a href="#-quickstart">Quickstart</a> •
-  <a href="#-developer-cli">CLI</a> •
-  <a href="#-documentation-sitemap">Documentation</a>
-</p>
+[![License: MIT](https://img.shields.io/badge/License-MIT-000000?style=flat-square&logo=opensourceinitiative&logoColor=white)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Next.js](https://img.shields.io/badge/Next.js-15-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org/)
+[![MongoDB](https://img.shields.io/badge/MongoDB-7.0-47A248?style=flat-square&logo=mongodb&logoColor=white)](https://www.mongodb.com/)
+[![Redis](https://img.shields.io/badge/Redis-7-DC382D?style=flat-square&logo=redis&logoColor=white)](https://redis.io/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white)](docker-compose.yml)
+[![Tests](https://img.shields.io/badge/Tests-35%20passing-22C55E?style=flat-square&logo=pytest&logoColor=white)](tests/)
+[![Architecture](https://img.shields.io/badge/Architecture-Modular%20Monorepo-6366F1?style=flat-square)](docs/ARCHITECTURE.md)
+
+<br />
+
+[Overview](#overview) · [Architecture](#architecture) · [Capabilities](#capabilities) · [Repository Layout](#repository-layout) · [Quickstart](#quickstart) · [CLI](#developer-cli) · [API Reference](#api-reference) · [Documentation](#documentation)
 
 </div>
 
 ---
 
-## 🌟 Overview
+## Overview
 
-**Ziref** is a modern, modular, production-oriented developer platform designed to bridge the gap between web deployment and mobile application distribution.
+Ziref is a self-hostable, production-grade developer infrastructure platform for automating the full software delivery lifecycle from source archive to live deployment and native mobile distribution.
 
-Developers submit a raw project archive (ZIP) or connect a public Git repository. Ziref automatically analyzes the dependencies and build pipeline, provisions an isolated ephemeral Docker execution sandbox with enforced resource quotas, compiles the distribution bundle, serves the resulting immutable deployment behind a high-performance reverse router, and provides **1-click native mobile packaging into an installable Android APK** with zero manual Gradle configuration.
+A developer submits a raw project archive (`.zip`) or a public Git repository URL. Ziref automatically detects the project's framework and build toolchain, provisions an isolated ephemeral Docker sandbox with enforced resource quotas, compiles the distribution bundle, atomically serves the immutable deployment behind a hardened multi-tenant reverse router, and optionally packages the deployed web application into an installable Android APK — without requiring any Gradle or Android SDK configuration from the developer.
 
----
-
-## 🚀 Core Capabilities
-
-### 1. 🔍 Zero-Configuration Deterministic Analyzer
-- **Polyglot & Framework Detection**: Automatic inspection of `package.json`, dependency trees, configuration manifests, and directory layouts.
-- **Out-of-the-Box Framework Support**: Vite, React, Next.js, Vue, Angular, Node.js, and static HTML/CSS/JS.
-- **Automated Parameter Inference**: Predicts package managers (`npm`, `pnpm`, `yarn`, `bun`), compilation scripts (`build`), output distribution directories (`dist`, `out`, `build`), and runtime execution modes.
-
-### 2. 🛡️ Untrusted Code Isolation & Sandboxed Builds
-- **Hardened Ephemeral Containers**: Build tasks execute inside isolated Docker containers with non-root user privileges, read-only root filesystems where appropriate, and strictly isolated bridge networking.
-- **Resource Constraints (cgroups)**: Enforced limits per build task (1.0 CPU core, 1024 MB RAM, 128 max PIDs, and 300-second execution timeouts).
-- **Archive Security Validation**: Defense against Zip Slip directory traversal, decompression bombs (100x uncompressed ratio limits), symlink escapes, and path manipulation attacks.
-- **Zero-Prerequisite Subprocess Fallback**: Automatically falls back to an isolated process runner on local machines when Docker Desktop is inactive.
-
-### 3. 📦 Atomic, Immutable Deployments & Rollbacks
-- **Zero-Downtime Cutover**: Each build produces an immutable, SHA-256 verified `.tar.gz` distribution artifact extracted to an isolated directory path.
-- **Traffic Pointer Switching**: Active traffic switches instantly via in-memory Redis routing caches and MongoDB pointers.
-- **1-Click Instant Rollback**: Revert production traffic to any prior successful deployment in milliseconds.
-
-### 4. 📱 Appify Engine (Native Android Compilation)
-- **One-Click Native Transformation**: Transforms any deployed web application into a complete, modern Android Studio Kotlin project.
-- **Production Android Architecture**: Modern `WebViewClient` shell, pull-to-refresh (`SwipeRefreshLayout`), offline fallback screens, and responsive lifecycle bindings.
-- **Adaptive App Icons & Permissions**: Auto-generates Android adaptive vector drawables (`mipmap-anydpi-v26`) and wires selectable hardware permissions (`CAMERA`, `ACCESS_FINE_LOCATION`, `POST_NOTIFICATIONS`, `RECORD_AUDIO`).
-- **Downloadable Artifacts**: Directly compiles and serves downloadable debug `.apk` files and full Gradle source `.zip` archives.
-
-### 5. 🧠 AI Build Failure Diagnostics
-- **Intelligent Error Pattern Matching**: Inspects terminal error streams to classify failure categories (`MISSING_DEPENDENCY`, `MISSING_BUILD_SCRIPT`, `COMMAND_NOT_FOUND`, `OUTPUT_DIRECTORY_MISSING`, `OUT_OF_MEMORY`, `TYPESCRIPT_ERROR`, `SYNTAX_ERROR`, `ENV_VAR_MISSING`).
-- **Actionable Fix Guidance**: Generates root-cause summaries and copy-pasteable resolution commands right inside the dashboard and CLI.
-
-### 6. 🌐 Hardened Production Site Router
-- **Dynamic Multi-Tenant Routing**: Directs traffic based on subdomains (`<slug>.localhost:8080`), path prefixes (`/sites/<slug>/`), or custom verified CNAME hostnames (`app.mycompany.com`).
-- **Production Security Headers**: Automatically applies `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `X-XSS-Protection`, `Referrer-Policy`, and `Permissions-Policy`.
-- **Intelligent Caching**: Injects `Cache-Control: public, max-age=31536000, immutable` on hashed assets (`.js`, `.css`, `/assets/`) and `no-cache` on `index.html`.
-- **In-Flight Compression**: Native Gzip streaming compression middleware for sub-millisecond asset transfers.
-
-### 7. 📊 Traffic Analytics & Observability
-- **Real-Time Request Metrics**: Aggregates HTTP access traffic into total request counts, unique visitors, response status codes (`2xx`, `3xx`, `4xx`, `5xx`), and latency percentiles (`avg`, `p95`).
-- **Endpoint Performance**: Tracks top visited paths and device distribution (Desktop, Mobile, Tablet).
-- **Live Terminal Log Streaming**: Server-Sent Events (SSE) stream build logs and HTTP access logs live into the dashboard with sub-50ms latency.
-
-### 8. 💻 Ziref Developer CLI (`packages/cli`)
-- Zero-dependency, ANSI-colored command-line interface.
-- Deploy local directories directly to production (`ziref deploy`), inspect logs (`ziref logs`), and download mobile APKs (`ziref appify`) without leaving the terminal.
-
-### 9. 🔔 Outbound HMAC Webhooks
-- Delivers real-time notifications for `build.completed`, `build.failed`, and `deployment.ready` to Slack, Discord, or custom backend services.
-- Authenticated with cryptographic `X-Ziref-Signature` HMAC-SHA256 headers.
+The platform is designed to operate with **zero external runtime dependencies** during local development: when MongoDB and Redis are unavailable, Ziref automatically activates embedded in-memory fallback datastores, enabling the full build-deploy-preview pipeline on any machine with nothing more than Python and Node.js installed.
 
 ---
 
-## 🏗️ System Architecture
+## Architecture
 
-```text
- ┌────────────────────────────────────────────────────────────────────────┐
- │                           INGESTION CHANNELS                           │
- │   • Dashboard Web UI (Next.js 15)                                      │
- │   • Ziref Developer CLI (`ziref deploy`)                               │
- │   • Git Remote Clone (`POST /projects/import-git`)                     │
- └───────────────────────────────────┬────────────────────────────────────┘
-                                     │ Multipart Archive / Git URL
-                                     ▼
- ┌────────────────────────────────────────────────────────────────────────┐
- │                           ZIREF API BACKEND                            │
- │   • FastAPI Async Gateway (Port 8000)                                  │
- │   • JWT + bcrypt Authentication & Multi-Tenant Authorization           │
- │   • Fernet Symmetric Secret Encryption at Rest                         │
- │   • Project Analyzer (Zip Slip, Bomb Defense, AST Framework Detection) │
- └───────────────────┬───────────────────────────────┬────────────────────┘
-                     │ Push Job                      │ Persist
-                     ▼                               ▼
-       ┌───────────────────────────┐   ┌───────────────────────────┐
-       │   REDIS JOB BROKER        │   │    MONGODB DATASTORE      │
-       │   • `build` Queue         │   │   • Users & Projects      │
-       │   • `deploy` Queue        │   │   • Builds & Deployments  │
-       │   • `app_build` Queue     │   │   • Runtime Logs & Events │
-       │   • Pub/Sub Event Channels│   │   • Encrypted Env Vars    │
-       └─────────────┬─────────────┘   └───────────────────────────┘
-                     │ Consume Job
-                     ▼
- ┌────────────────────────────────────────────────────────────────────────┐
- │                      ISOLATED WORKER DAEMON                            │
- │   • Ephemeral Docker Sandbox Runner (CPU/RAM/PID Limits)               │
- │   • Subprocess Sandbox Fallback                                        │
- │   • Real-Time SSE Log Streaming via Redis Pub/Sub                      │
- │   • AI Build Failure Diagnostics Engine                                │
- │   • Android Kotlin Studio Project & APK Compiler                       │
- └───────────────────┬────────────────────────────────────────────────────┘
-                     │ Store Artifact
-                     ▼
- ┌────────────────────────────────────────────────────────────────────────┐
- │                     STORAGE & ATOMIC ROUTING                           │
- │   • Artifact Repository (`./storage/artifacts/*.tar.gz`)               │
- │   • Immutable Deployments (`./storage/deployments/<id>/`)              │
- │   • Dynamic Reverse Site Router (FastAPI, Port 8080)                   │
- │   • Custom Domain Resolution & Security Header Injection               │
- └────────────────────────────────────────────────────────────────────────┘
+```
+                         ┌──────────────────────────────────────┐
+                         │           Ingestion Channels          │
+                         │  Dashboard (Next.js 15) · CLI · Git   │
+                         └──────────────────┬───────────────────┘
+                                            │  ZIP / Git URL
+                                            ▼
+                         ┌──────────────────────────────────────┐
+                         │         Ziref API Gateway            │
+                         │         FastAPI · Port 8000          │
+                         │                                      │
+                         │  • JWT + bcrypt Authentication       │
+                         │  • Fernet Encrypted Secret Storage   │
+                         │  • Archive Security Validation       │
+                         │  • Framework Analyzer                │
+                         │  • SSE Log Streaming                 │
+                         └───────────┬──────────────┬───────────┘
+                                     │              │
+                          Push Job   │              │  Persist
+                                     ▼              ▼
+                   ┌─────────────────────┐  ┌──────────────────────┐
+                   │   Redis Job Broker  │  │   MongoDB Datastore   │
+                   │                     │  │                       │
+                   │  build queue        │  │  Users & Projects     │
+                   │  deploy queue       │  │  Builds & Events      │
+                   │  app_build queue    │  │  Deployments          │
+                   │  Pub/Sub channels   │  │  Encrypted Env Vars   │
+                   └──────────┬──────────┘  └──────────────────────┘
+                              │  Consume
+                              ▼
+                   ┌──────────────────────────────────────────────┐
+                   │             Isolated Worker Daemon           │
+                   │                                              │
+                   │  • Ephemeral Docker Sandbox (cgroups)        │
+                   │  • Subprocess Fallback Runner                │
+                   │  • Real-Time SSE via Redis Pub/Sub           │
+                   │  • Build Failure Diagnostic Engine           │
+                   │  • Android Kotlin APK Compiler               │
+                   └──────────────────────┬───────────────────────┘
+                                          │  Store Artifact
+                                          ▼
+                   ┌──────────────────────────────────────────────┐
+                   │          Storage & Atomic Routing            │
+                   │                                              │
+                   │  artifacts/  ·  deployments/  ·  mobile/    │
+                   │  Dynamic Site Router · Port 8080             │
+                   │  Custom Domain Resolution                    │
+                   │  Security Header Injection                   │
+                   └──────────────────────────────────────────────┘
 ```
 
+### Service Topology
+
+| Service | Runtime | Port | Responsibility |
+|---|---|---|---|
+| `api` | FastAPI / Uvicorn | `8000` | REST API, Auth, SSE, Embedded Worker |
+| `worker` | Python asyncio daemon | — | Build executor, APK compiler, Webhook dispatch |
+| `deployer` | FastAPI / Uvicorn | `8080` | Reverse proxy, SPA routing, domain resolution |
+| `dashboard` | Next.js 15 App Router | `3000` | Developer console UI |
+| `mongodb` | MongoDB 7.0 | `27017` | Primary datastore |
+| `redis` | Redis 7 Alpine | `6379` | Job broker, Pub/Sub, routing cache |
+
 ---
 
-## 📁 Monorepo Layout
+## Capabilities
 
-```text
-zipref/
+### Polyglot Framework Detection
+
+The analyzer engine deterministically inspects extracted project trees without executing any user code. It reads `package.json`, lockfiles (`pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`, `bun.lockb`), and framework config manifests (`vite.config.*`, `next.config.*`, `angular.json`, `svelte.config.*`, `astro.config.*`) to infer the build command, output directory, and package manager. Supported targets: Vite, React, Next.js, Vue, Angular, Svelte, Astro, Node.js, static HTML.
+
+### Sandboxed Build Execution
+
+Build jobs execute inside ephemeral Docker containers pulled from a configurable sandbox image (`node:20-alpine` by default). Each container is subject to hard resource constraints enforced via Linux cgroups:
+
+| Constraint | Default |
+|---|---|
+| CPU | 1.0 vCPU |
+| Memory | 1024 MB |
+| Max PIDs | 128 |
+| Timeout | 300 seconds |
+
+Non-root user (`builduser`, UID 10001) is enforced. On machines where Docker is unavailable, the worker automatically falls back to an isolated subprocess runner.
+
+**Archive security controls**: Zip Slip directory traversal canonicalization, decompression bomb rejection (100:1 ratio limit, 250 MB extracted size cap, 10,000 file count cap), symlink escape detection, and dangerous filetype blocking (Unix sockets, named pipes).
+
+### Atomic Immutable Deployments
+
+Every successful build produces a SHA-256-verified `.tar.gz` distribution artifact extracted to an isolated directory path (`storage/deployments/{deployment_id}/`). Active traffic is switched by updating a single pointer in Redis and MongoDB — no file copy, no downtime, no rebuild. Rolling back to any prior successful deployment takes effect in under one second.
+
+### Web-to-Native Android Distribution (Appify Engine)
+
+Any deployed web application can be transformed into an installable Android APK with a single API call. The engine generates a complete Android Studio / Gradle project:
+
+- `MainActivity.kt` — `WebViewClient` shell with DOM storage, file upload, pull-to-refresh (`SwipeRefreshLayout`), and offline fallback
+- Adaptive vector app icons (`mipmap-anydpi-v26`)
+- Selectable hardware permission bindings: `CAMERA`, `ACCESS_FINE_LOCATION`, `POST_NOTIFICATIONS`, `RECORD_AUDIO`
+- Compiled debug `.apk` served as a direct download artifact
+- Full Gradle source `.zip` archive for developers requiring native customization
+
+### Dynamic Multi-Tenant Site Router
+
+The site router resolves live traffic through three routing strategies simultaneously:
+
+- **Subdomain**: `http://<slug>.localhost:8080`
+- **Path prefix**: `http://localhost:8080/sites/<slug>/`
+- **Custom CNAME**: `http://app.yourdomain.com` (verified in the domains collection)
+
+All responses receive production-grade HTTP security headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `X-XSS-Protection`, `Referrer-Policy`, and `Permissions-Policy`. Hashed static assets (`.js`, `.css`, `/assets/`) receive `Cache-Control: public, max-age=31536000, immutable`. Entry points (`index.html`) receive `no-cache`. Gzip streaming compression is applied at the middleware layer.
+
+### Real-Time Log Streaming
+
+Build logs are captured as structured events (`timestamp`, `stage`, `level`, `message`) and published to Redis Pub/Sub channel `build:{build_id}:logs`. The API gateway exposes these as Server-Sent Events (SSE) streams consumed directly by the dashboard terminal viewer with sub-50ms latency. Access logs from the site router are similarly streamed.
+
+### Build Failure Diagnostics
+
+The diagnostic engine inspects stdout/stderr streams from failed builds and classifies failures into one of eight categories: `MISSING_DEPENDENCY`, `MISSING_BUILD_SCRIPT`, `COMMAND_NOT_FOUND`, `OUTPUT_DIRECTORY_MISSING`, `OUT_OF_MEMORY`, `TYPESCRIPT_ERROR`, `SYNTAX_ERROR`, `ENV_VAR_MISSING`. Each classification produces a human-readable root-cause summary and copy-pasteable remediation commands surfaced in both the dashboard and CLI.
+
+### Traffic Analytics
+
+Per-deployment access metrics are aggregated from site router access logs: total request count, unique visitor count, response status code distribution (2xx/3xx/4xx/5xx), average and p95 latency, top-accessed paths, and device-class distribution (Desktop / Mobile / Tablet).
+
+### HMAC Webhook Notifications
+
+Outbound webhook deliveries are signed with `X-Ziref-Signature: sha256=<hmac>` using HMAC-SHA256 keyed on a per-project secret. Events delivered: `build.completed`, `build.failed`, `deployment.ready`. Compatible with Slack, Discord, and arbitrary HTTP endpoints.
+
+### Encrypted Secret Management
+
+Environment variables are encrypted at rest using Fernet symmetric encryption (AES-128-CBC + HMAC-SHA256). Secrets are masked in all API responses and injected into sandbox containers only during build execution as ephemeral environment variables.
+
+---
+
+## Security Architecture
+
+Defense-in-depth is applied across every stage of the pipeline.
+
+**Archive Ingestion**
+- Zip Slip traversal: explicit path canonicalization on every extracted entry against the target directory boundary
+- Decompression bombs: compressed-to-uncompressed byte ratio capped at 100:1; absolute extracted size capped at 250 MB
+- Dangerous entry types: Unix sockets, named pipes, and out-of-boundary symlinks are rejected at extraction time
+
+**Sandbox Isolation**
+- Non-root execution (UID 10001) inside Docker containers
+- Docker socket (`/var/run/docker.sock`) is not mounted into sandbox containers
+- Hard resource constraints via Linux cgroups (CPU, memory, PIDs)
+
+**Multi-Tenant Authorization**
+- Every resource (project, build, deployment, secret, mobile artifact) is tagged with a tenant `user_id`
+- FastAPI dependency injection verifies ownership on every API endpoint before any operation is performed
+
+**Credential Storage**
+- JWT tokens signed with HS256; configurable expiry (default 24 hours)
+- User passwords hashed with bcrypt (cost factor 12)
+- Environment variable secrets encrypted with Fernet before MongoDB persistence
+
+---
+
+## Repository Layout
+
+```
+ziref/
 ├── apps/
-│   └── dashboard/                  # Next.js 15 Dark-Themed Developer Dashboard
-│       ├── app/                    # App Router (Pages: Overview, Projects, Logs, Analytics, Appify)
-│       ├── components/             # Reusable UI components, TerminalViewer, StatusBadge
-│       ├── lib/api.ts              # Type-safe API client for backend communication
-│       └── public/                 # Static assets and demo fixtures
+│   └── dashboard/                  Next.js 15 App Router developer console
+│       ├── app/                    Page routes (dashboard, projects, builds, analytics, appify)
+│       ├── components/             Shared UI components (TerminalViewer, StatusBadge, CommandPalette)
+│       └── lib/                    API client, auth context, theme, toast, date utilities
+│
 ├── packages/
-│   ├── cli/                        # Ziref Developer CLI (zero external dependencies)
-│   │   ├── main.py                 # CLI entry point, argument parsing, ANSI formatting
-│   │   ├── client.py               # HTTP client with multipart upload support
-│   │   └── config.py               # Local token storage (~/.ziref/config.json)
-│   └── types/                      # Shared TypeScript definitions (@ziref/types)
+│   ├── cli/                        Ziref Developer CLI (zero runtime dependencies)
+│   │   ├── main.py                 Entry point, argument parsing, ANSI output formatting
+│   │   ├── client.py               HTTP client with multipart upload and streaming support
+│   │   └── config.py               Credential storage (~/.ziref/config.json)
+│   └── types/                      Shared TypeScript type definitions (@ziref/types)
+│
 ├── services/
-│   ├── analyzer/                   # Framework detection & archive security
-│   │   ├── archive_validator.py    # Path traversal, Zip Slip, bomb mitigation
-│   │   ├── detector.py             # Deterministic AST & manifest framework analyzer
-│   │   └── git_importer.py         # Shallow git clone & URL security sanitization
-│   ├── api/                        # Central REST API Service (FastAPI)
-│   │   ├── core/                   # Database (Mongo + Embedded), Redis (Live + In-Memory), Security
-│   │   ├── routers/                # Auth, Projects, Uploads, Builds, Deployments, Domains, Analytics
-│   │   └── schemas/                # Pydantic v2 validation contracts
-│   ├── builder/                    # Sandbox execution engine
-│   │   ├── docker_sandbox.py       # Hardened Docker container & fallback subprocess runner
-│   │   ├── build_executor.py       # Pipeline coordinator, packaging, live log emitter
-│   │   └── diagnostics.py          # AI build failure diagnostic classifier
-│   ├── deployer/                   # Atomic deployment service & HTTP site router
-│   │   ├── deployer_service.py     # Tarball unpacking, zero-downtime cutover, rollback
-│   │   └── site_router.py          # Dynamic reverse proxy, custom domains, security headers
-│   ├── app_builder/                # Web-to-mobile packaging engine
-│   │   ├── android_generator.py    # Kotlin project generator, adaptive icons, permissions
-│   │   └── apk_builder.py          # Installable debug APK compiler
-│   └── worker/                     # Asynchronous background job daemon
+│   ├── analyzer/                   Framework detection and archive security
+│   │   ├── archive_validator.py    Zip Slip, bomb detection, symlink mitigation
+│   │   ├── detector.py             Deterministic manifest and lockfile framework analyzer
+│   │   └── git_importer.py         Shallow git clone with URL sanitization
+│   │
+│   ├── api/                        Core REST API (FastAPI)
+│   │   ├── core/                   Database (Mongo + embedded fallback), Redis, config, security
+│   │   ├── routers/                Auth, Projects, Uploads, Builds, Deployments, Domains,
+│   │   │                           Analytics, Webhooks, Apps, Runtime Logs, Health
+│   │   └── schemas/                Pydantic v2 request/response contracts
+│   │
+│   ├── builder/                    Build pipeline and sandbox execution
+│   │   ├── docker_sandbox.py       Docker container orchestration and subprocess fallback
+│   │   ├── build_executor.py       Pipeline coordinator, tarball packaging, log emission
+│   │   └── diagnostics.py          Build failure classification engine
+│   │
+│   ├── deployer/                   Atomic deployment and site routing
+│   │   ├── deployer_service.py     Tarball unpacking, zero-downtime pointer swap, rollback
+│   │   └── site_router.py          Multi-tenant reverse proxy, custom domains, header injection
+│   │
+│   ├── app_builder/                Web-to-Android packaging engine
+│   │   ├── android_generator.py    Kotlin project generation, adaptive icons, permissions
+│   │   └── apk_builder.py          Debug APK compilation pipeline
+│   │
+│   └── worker/                     Asynchronous background job daemon
+│       └── main.py                 Queue consumer, job dispatcher, concurrency controller
+│
 ├── infrastructure/
-│   └── docker/                     # Dockerfiles for API, Worker, Router, Dashboard, Sandbox
+│   └── docker/                     Per-service Dockerfiles (api, worker, deployer, dashboard, sandbox)
+│
 ├── scripts/
-│   ├── dev.ps1                     # ⚡ ONE-COMMAND: Start all 4 services in parallel
-│   ├── start-all.ps1               # Unified platform launch helper
-│   ├── start-local.ps1             # Local development boot script
-│   ├── test.ps1                    # Full automated test & build verification script
-│   └── ziref.ps1                   # Developer CLI executable wrapper
-├── storage/                        # Persistent volume (uploads, workspaces, artifacts, mobile)
-├── tests/                          # 35 Automated Unit & Integration Tests (100% passing)
-├── docker-compose.yml              # Production container orchestration
-└── requirements.txt                # Python backend dependencies
+│   ├── dev.ps1                     One-command: all services in parallel (color-coded output)
+│   ├── test.ps1                    Full automated test and build verification
+│   └── ziref.ps1                   CLI wrapper for Windows
+│
+├── tests/
+│   ├── unit/                       Isolated unit tests (diagnostics, analytics, archive validation)
+│   └── integration/                End-to-end pipeline tests (build, deploy, router, APK, git import)
+│
+├── docs/                           Technical specifications
+│   ├── ARCHITECTURE.md             Subsystem topology, data models, queue flows
+│   ├── API.md                      REST and SSE endpoint reference
+│   ├── SECURITY.md                 Threat model, sandbox constraints, mitigation matrix
+│   ├── DEPLOYMENT.md               Production scaling, SSL termination, orchestration
+│   ├── PRD.md                      Product requirements and scope definition
+│   └── ROADMAP.md                  Phased development roadmap
+│
+├── docker-compose.yml              Full-stack production container orchestration
+├── requirements.txt                Python backend dependencies
+└── .env.example                    Environment variable reference template
 ```
 
 ---
 
-## ⚡ Quickstart
+## Data Store Schema
+
+| Collection | Key Fields | Purpose |
+|---|---|---|
+| `users` | `_id`, `email`, `password_hash`, `name`, `created_at` | User identities |
+| `projects` | `_id`, `user_id`, `name`, `slug`, `framework`, `active_deployment_id` | Project definitions |
+| `uploads` | `_id`, `project_id`, `file_size`, `checksum`, `storage_path`, `analysis` | Uploaded archive records |
+| `builds` | `_id`, `project_id`, `upload_id`, `status`, `exit_code`, `duration_seconds` | Build execution records |
+| `build_events` | `_id`, `build_id`, `timestamp`, `stage`, `level`, `message` | Structured build log events |
+| `deployments` | `_id`, `project_id`, `build_id`, `status`, `url`, `artifact_path` | Immutable deployment records |
+| `environment_variables` | `_id`, `project_id`, `key`, `encrypted_value`, `is_secret` | Fernet-encrypted project secrets |
+| `mobile_apps` | `_id`, `project_id`, `app_name`, `package_id`, `version`, `theme` | Android app configurations |
+| `mobile_builds` | `_id`, `mobile_app_id`, `status`, `apk_artifact_id`, `source_artifact_id` | Android build records |
+
+---
+
+## Quickstart
 
 ### Prerequisites
 
-| Requirement | Minimum Version | Notes |
-| :--- | :--- | :--- |
-| **Python** | 3.11+ (Tested on 3.14) | Core backend services and CLI |
-| **Node.js** | 20+ (Tested on 22) | Next.js 15 dashboard |
-| **pnpm** | 9+ (Tested on 11) | Monorepo package manager |
-| **Docker Desktop** | Optional for Dev | Automatically activates embedded datastores if inactive |
+| Requirement | Version | Notes |
+|---|---|---|
+| Python | 3.11+ | Core backend runtime and CLI |
+| Node.js | 20+ | Next.js 15 dashboard |
+| pnpm | 9+ | Monorepo workspace manager |
+| Docker Desktop | Optional | Enables sandboxed builds; embedded fallback activates automatically when unavailable |
 
 ---
 
-### 1. Environment Setup
-
-Clone the repository and initialize the environment file:
+### 1. Clone and Configure
 
 ```bash
+git clone https://github.com/Chetan0e/Ziref.git
+cd Ziref
 cp .env.example .env
+```
+
+Edit `.env` and set a strong `JWT_SECRET` and `ENCRYPTION_KEY`. All other values work as-is for local development.
+
+---
+
+### 2. Install Dependencies
+
+```bash
+# Python backend
+python -m venv .venv
+.venv\Scripts\activate          # Windows
+source .venv/bin/activate       # macOS / Linux
+pip install -r requirements.txt
+
+# Node.js dashboard
+pnpm install
 ```
 
 ---
 
-### 2. Run Verification Test Suite
+### 3. Run the Test Suite
 
-Verify all 35 Python unit and integration tests, as well as the Next.js production build:
+Verify the full backend test suite and Next.js production build before starting:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/test.ps1
 ```
 
-```text
+Expected output:
+```
 ==> Running Python Unit & Integration Tests...
 ============================= 35 passed in 8.87s ==============================
 ==> Verifying Dashboard Build & Types...
- ✓ Compiled successfully in 1.9s
+ ✓ Compiled successfully
  ✓ Generating static pages (9/9)
-==> All Tests and Builds Passed Successfully!
+==> All Tests and Builds Passed Successfully.
 ```
 
 ---
 
-### 3. Launch Development Services
+### 4. Start All Services
 
-#### ⚡ Option A: One-Command Launch (Recommended)
+#### Option A — Unified launcher (recommended)
 
-Starts **all 4 services in parallel** in a single terminal window with live color-coded log output. Press `Ctrl+C` to stop everything cleanly.
+Starts all four services in parallel with color-coded log output. Press `Ctrl+C` to stop all services cleanly.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/dev.ps1
 ```
 
-> **What this does:**
-> - Attempts to start Docker datastores (MongoDB & Redis) — falls back to embedded in-memory datastores automatically if Docker is unavailable.
-> - Spawns the API Gateway, Worker Daemon, Site Router, and Next.js Dashboard as parallel background jobs.
-> - Streams all service logs into one terminal with color-coded prefixes (`[API]`, `[Worker]`, `[SiteRouter]`, `[Dashboard]`).
-> - Cleans up all processes on `Ctrl+C`.
+> The launcher attempts to connect to local MongoDB and Redis. If neither is running, embedded in-memory fallback datastores are activated automatically. No configuration change is required.
 
-#### Option B: Individual Service Commands
+#### Option B — Individual service terminals
 
-Run each service independently in its own terminal. All services can run in any order — they connect to each other automatically.
+Run each service in a separate terminal session. Services connect to each other automatically regardless of start order.
 
----
-
-##### 🔷 Service 1 — API Gateway
-
-The core FastAPI backend. Handles auth, project management, builds, deployments, analytics, and webhooks. Starts with hot-reload enabled.
-
+**API Gateway**
 ```powershell
-.\.venv\Scripts\uvicorn services.api.main:app --port 8000 --reload
+.venv\Scripts\uvicorn services.api.main:app --port 8000 --reload
 ```
 
-| | |
-|---|---|
-| **Base URL** | `http://localhost:8000` |
-| **Swagger Docs** | `http://localhost:8000/docs` |
-| **ReDoc** | `http://localhost:8000/redoc` |
-
----
-
-##### 🟣 Service 2 — Background Worker Daemon
-
-Consumes build jobs from the Redis queue (or embedded memory queue), runs sandboxed builds, streams live logs, compiles Android APKs, and dispatches webhooks.
-
+**Worker Daemon**
 ```powershell
-.\.venv\Scripts\python -m services.worker.main
+.venv\Scripts\python -m services.worker.main
 ```
 
-> Runs silently in the background. View its activity in the Dashboard → Builds log stream.
-
----
-
-##### 🟡 Service 3 — Dynamic Site Router
-
-FastAPI-based reverse proxy that serves deployed web apps. Routes traffic by subdomain (`<slug>.localhost:8080`), path prefix, or custom CNAME domain. Injects security headers and caching.
-
+**Site Router**
 ```powershell
-.\.venv\Scripts\python -m services.deployer.main
+.venv\Scripts\python -m services.deployer.main
 ```
 
-| | |
-|---|---|
-| **Base URL** | `http://localhost:8080` |
-| **Deployed Sites** | `http://<project-slug>.localhost:8080` |
-
----
-
-##### 🔵 Service 4 — Next.js Dashboard
-
-The developer-facing web UI. Built with Next.js 15 App Router. Provides project management, real-time build log streaming, analytics, and one-click Appify (Android APK generation).
-
+**Dashboard**
 ```powershell
 pnpm --filter dashboard dev
 ```
 
-| | |
-|---|---|
-| **Dashboard URL** | `http://localhost:3000` |
-| **Hot Reload** | Enabled (HMR via Next.js) |
-
-#### Option C: Production Docker Compose
-
-Runs the full stack (including MongoDB & Redis) inside Docker containers:
+#### Option C — Docker Compose (full stack)
 
 ```bash
 docker compose up -d
-```
-
-To view container logs:
-
-```bash
-docker compose logs -f
-```
-
-To stop all containers:
-
-```bash
-docker compose down
+docker compose logs -f      # stream all service logs
+docker compose down         # stop and remove containers
 ```
 
 ---
 
-### 4. Service Endpoints & Ports
+### 5. Service Endpoints
 
-| Component | URL | Description |
-| :--- | :--- | :--- |
-| **Dashboard UI** | `http://localhost:3000` | Web application management console |
-| **API Gateway** | `http://localhost:8000` | Core platform REST API |
-| **Interactive Docs** | `http://localhost:8000/docs` | Swagger / OpenAPI interactive explorer |
-| **Site Router** | `http://localhost:8080` | Live web preview & custom domain router |
-| **MongoDB** | `localhost:27017` | Document database (embedded fallback available) |
-| **Redis** | `localhost:6379` | Event broker & job queue (embedded fallback available) |
+| Service | URL | Notes |
+|---|---|---|
+| Dashboard | `http://localhost:3000` | Developer console |
+| API Gateway | `http://localhost:8000` | Core REST API |
+| OpenAPI Docs | `http://localhost:8000/docs` | Interactive Swagger UI |
+| ReDoc | `http://localhost:8000/redoc` | Alternative API reference |
+| Site Router | `http://localhost:8080` | Deployed site preview |
+| Deployed Site | `http://<slug>.localhost:8080` | Per-project subdomain routing |
 
 ---
 
-## 💻 Developer CLI Usage
+## Developer CLI
 
-The Ziref Developer CLI allows end-to-end deployments without ever leaving the terminal.
+The Ziref CLI provides end-to-end project management from the terminal without opening the dashboard.
 
 ```bash
-# 1. Authenticate with your Ziref account
+# Authenticate
 python -m packages.cli.main login
-# Or on Windows:
+# Windows shorthand:
 .\scripts\ziref.ps1 login
 
-# 2. Verify authenticated user identity
+# Show authenticated identity
 .\scripts\ziref.ps1 whoami
 
-# 3. List all deployed projects & live URLs
+# List all projects and their live URLs
 .\scripts\ziref.ps1 list
 
-# 4. Deploy the current local directory
+# Deploy the current working directory
 .\scripts\ziref.ps1 deploy
 
-# 5. Transform project into a native Android APK and download directly
-.\scripts\ziref.ps1 appify my-awesome-app
+# Package a project as a native Android APK and download it
+.\scripts\ziref.ps1 appify <project-slug>
+
+# Tail live build logs for a build ID
+.\scripts\ziref.ps1 logs <build-id>
 ```
 
----
-
-## 🔒 Security Architecture
-
-Ziref enforces defense-in-depth across every stage of the lifecycle:
-
-1. **Archive Ingestion Defense**:
-   - **Zip Slip Traversal**: Explicit canonicalization of target paths ensures files cannot write outside destination boundaries.
-   - **Decompression Bombs**: Verifies compressed vs. uncompressed byte ratios (max 100:1) and caps maximum archive extract size at 250 MB.
-   - **Dangerous Elements**: Blocks Unix socket files, named pipes, and dangerous symbolic links that point outside the sandbox boundary.
-
-2. **Sandbox Hardening**:
-   - Non-root execution (`UID 10001`).
-   - Host filesystem isolation (no Docker socket `/var/run/docker.sock` exposure).
-   - Strict cgroups resource capping (CPU, memory, maximum PID count).
-
-3. **Multi-Tenant Data Isolation**:
-   - Every project, build, deployment, secret, and mobile artifact is tagged with tenant ownership identifiers.
-   - API middleware strictly verifies tenant authorization headers on every request.
-
-4. **Secret Storage**:
-   - Environment variables are encrypted at rest using symmetric **Fernet (AES-128-CBC + HMAC-SHA256)** keys.
-   - Secrets are masked in UI and API responses and injected into sandboxes only during build execution.
+Credentials are persisted locally at `~/.ziref/config.json`. The CLI has zero runtime dependencies beyond the Python standard library.
 
 ---
 
-## 📚 Documentation Sitemap
+## API Reference
 
-Comprehensive specifications and operational guides are maintained in the [`docs/`](docs/) directory:
+The full REST and SSE API is documented in [`docs/API.md`](docs/API.md). The interactive Swagger explorer is available at `http://localhost:8000/docs` when the API Gateway is running.
 
-- 📋 [**Product Requirements Document (`docs/PRD.md`)**](docs/PRD.md): Vision, user personas, MVP scope, and product principles.
-- 🏛️ [**Architecture Specification (`docs/ARCHITECTURE.md`)**](docs/ARCHITECTURE.md): Microservices topology, data models, and queue flows.
-- 🛡️ [**Security Specification (`docs/SECURITY.md`)**](docs/SECURITY.md): Threat modeling, cgroups, sandbox constraints, and mitigation strategies.
-- 🔌 [**REST & SSE API Reference (`docs/API.md`)**](docs/API.md): Full documentation of all HTTP endpoints, schemas, and live streams.
-- 🚀 [**Production Deployment Guide (`docs/DEPLOYMENT.md`)**](docs/DEPLOYMENT.md): Production scaling, SSL termination, and orchestration instructions.
-- 🤝 [**Contributing Guide (`docs/CONTRIBUTING.md`)**](docs/CONTRIBUTING.md): Monorepo setup, branch standards, and code hygiene rules.
-- 🗺️ [**Product Roadmap (`docs/ROADMAP.md`)**](docs/ROADMAP.md): Detailed phase breakdown from core MVP to commercial SaaS scaling.
+**Base URL**: `http://localhost:8000/api/v1`
+
+**Authentication**: Bearer token in `Authorization: Bearer <token>` header, obtained from `POST /api/v1/auth/login`.
+
+Selected endpoints:
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/auth/register` | Create a new user account |
+| `POST` | `/auth/login` | Obtain a JWT access token |
+| `GET` | `/projects` | List all projects for the authenticated user |
+| `POST` | `/projects` | Create a project |
+| `POST` | `/uploads/{project_id}` | Upload a project archive (multipart) |
+| `POST` | `/builds` | Trigger a build from an upload |
+| `GET` | `/builds/{build_id}/logs/stream` | SSE stream of real-time build logs |
+| `POST` | `/deployments/{build_id}` | Promote a successful build to production |
+| `POST` | `/deployments/{deployment_id}/rollback` | Roll back to a prior deployment |
+| `POST` | `/apps/{project_id}/appify` | Initiate Android APK generation |
+| `GET` | `/analytics/{project_id}` | Retrieve traffic analytics |
+| `GET` | `/health` | Health probe |
+| `GET` | `/ready` | Readiness probe |
 
 ---
 
-## 🧪 Testing
+## Environment Variables
 
-Execute the comprehensive automated test suite:
+| Variable | Default | Description |
+|---|---|---|
+| `APP_ENV` | `development` | Runtime environment (`development` / `production`) |
+| `MONGODB_URI` | `mongodb://localhost:27017/ziref` | MongoDB connection string |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection string |
+| `JWT_SECRET` | — | Secret key for JWT signing (**must be overridden in production**) |
+| `JWT_ALGORITHM` | `HS256` | JWT signing algorithm |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | Token expiry in minutes (24 h) |
+| `ENCRYPTION_KEY` | — | Fernet key for secret encryption (**must be overridden in production**) |
+| `STORAGE_PROVIDER` | `local` | Storage backend (`local` or `s3`) |
+| `STORAGE_PATH` | `./storage` | Local storage root directory |
+| `BUILD_CPU_LIMIT` | `1.0` | Docker CPU quota per build container |
+| `BUILD_MEMORY_LIMIT` | `1024m` | Docker memory limit per build container |
+| `BUILD_TIMEOUT_SECONDS` | `300` | Maximum build duration in seconds |
+| `WORKER_CONCURRENCY` | `4` | Parallel job capacity of the worker daemon |
+| `SANDBOX_IMAGE` | `node:20-alpine` | Docker image used for build sandboxes |
+| `BASE_DOMAIN` | `localhost:8080` | Domain used for constructing deployment URLs |
+
+---
+
+## Testing
 
 ```bash
-# Run all unit and integration tests
-.\.venv\Scripts\python -m pytest tests/ -v
+# Full test suite
+.venv\Scripts\python -m pytest tests/ -v
 
-# Run targeted test suites
-.\.venv\Scripts\python -m pytest tests/unit/test_diagnostics.py
-.\.venv\Scripts\python -m pytest tests/unit/test_analytics.py
-.\.venv\Scripts\python -m pytest tests/integration/test_git_import.py
-.\.venv\Scripts\python -m pytest tests/integration/test_router_security.py
+# Targeted suites
+.venv\Scripts\python -m pytest tests/unit/test_diagnostics.py -v
+.venv\Scripts\python -m pytest tests/unit/test_analytics.py -v
+.venv\Scripts\python -m pytest tests/integration/test_demo_flow.py -v
+.venv\Scripts\python -m pytest tests/integration/test_router_security.py -v
+.venv\Scripts\python -m pytest tests/integration/test_e2e_html_and_apk.py -v
+.venv\Scripts\python -m pytest tests/integration/test_static_and_mobile_pipeline.py -v
 ```
+
+The test suite covers: framework detection, archive security validation, build diagnostics, analytics aggregation, site router security, custom domain resolution, end-to-end HTML deployment, APK generation pipeline, and Git import flows.
 
 ---
 
-## 📄 License
+## Documentation
 
-This project is licensed under the terms of the **MIT License**. See [`LICENSE`](LICENSE) for details.
+| Document | Description |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Subsystem topology, data models, queue flows |
+| [`docs/API.md`](docs/API.md) | Full REST and SSE endpoint reference |
+| [`docs/SECURITY.md`](docs/SECURITY.md) | Threat model, sandbox constraints, mitigation matrix |
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Production scaling, SSL termination, orchestration |
+| [`docs/PRD.md`](docs/PRD.md) | Product requirements, scope, and design principles |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phased development roadmap |
+| [`CHANGELOG.md`](CHANGELOG.md) | Release history |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Contribution workflow and code standards |
+| [`SECURITY.md`](SECURITY.md) | Vulnerability disclosure policy |
 
-Developed with precision for modern software engineering teams.
+---
+
+## Contributing
+
+Contributions are welcome. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow, branch naming conventions, commit message standards, and code review process.
+
+---
+
+## License
+
+Ziref is released under the [MIT License](LICENSE).
+
+Copyright © 2026 Ziref Contributors.
