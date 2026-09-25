@@ -105,30 +105,83 @@ async def test_delete_project_by_id_and_slug():
 
 @pytest.mark.asyncio
 async def test_site_router_preview_and_downloads():
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1. Trailing slash redirect
-        redirect_res = await client.get("/sites/wild-pedia-web-project-enhanced", follow_redirects=False)
-        assert redirect_res.status_code == 302
-        assert redirect_res.headers["location"] == "/sites/wild-pedia-web-project-enhanced/"
+    import uuid
+    from bson import ObjectId
+    from services.api.core.config import settings
+    from services.api.core.database import connect_to_database, get_database
+    from services.deployer.site_router import app as router_app
 
-        # 2. Live preview HTML response with CSP frame-ancestors
-        preview_res = await client.get("/sites/wild-pedia-web-project-enhanced/")
+    await connect_to_database()
+    db = get_database()
+
+    # --- Setup: deployment directory fixture ---
+    slug = f"ci-preview-{uuid.uuid4().hex[:8]}"
+    deployment_id = str(ObjectId())
+    project_id = str(ObjectId())
+
+    deploy_dir = os.path.join(settings.STORAGE_PATH, "deployments", deployment_id)
+    os.makedirs(deploy_dir, exist_ok=True)
+    with open(os.path.join(deploy_dir, "index.html"), "w") as f:
+        f.write("<!DOCTYPE html><html><body><h1>CI Preview</h1></body></html>")
+
+    await db.projects.insert_one({
+        "_id": ObjectId(project_id),
+        "slug": slug,
+        "name": "CI Preview Project",
+        "active_deployment_id": deployment_id,
+        "status": "DEPLOYED",
+    })
+
+    # --- Setup: mobile build fixture with real artifact files on disk ---
+    mobile_build_id = str(ObjectId())
+    mobile_dir = os.path.join(settings.STORAGE_PATH, "mobile")
+    os.makedirs(mobile_dir, exist_ok=True)
+
+    apk_rel = f"mobile/app-debug-{mobile_build_id}.apk"
+    zip_rel = f"mobile/app-source-{mobile_build_id}.zip"
+    apk_abs = os.path.join(settings.STORAGE_PATH, apk_rel)
+    zip_abs = os.path.join(settings.STORAGE_PATH, zip_rel)
+
+    with open(apk_abs, "wb") as f:
+        f.write(b"PK\x03\x04" + b"\x00" * 26)   # minimal ZIP/APK stub
+    with open(zip_abs, "wb") as f:
+        f.write(b"PK\x03\x04" + b"\x00" * 26)
+
+    await db.mobile_builds.insert_one({
+        "_id": ObjectId(mobile_build_id),
+        "project_id": project_id,
+        "status": "APP_READY",
+        "apk_artifact_id": apk_rel,
+        "source_artifact_id": zip_rel,
+    })
+
+    # --- Tests against the site router ASGI app ---
+    router_transport = ASGITransport(app=router_app)
+    async with AsyncClient(transport=router_transport, base_url="http://localhost:8080") as router_client:
+        # 1. Trailing slash redirect
+        redirect_res = await router_client.get(f"/sites/{slug}", follow_redirects=False)
+        assert redirect_res.status_code == 302
+        assert redirect_res.headers["location"] == f"/sites/{slug}/"
+
+        # 2. Live preview HTML response with security headers
+        preview_res = await router_client.get(f"/sites/{slug}/")
         assert preview_res.status_code == 200
         assert "text/html" in preview_res.headers.get("content-type", "")
         assert "frame-ancestors" in preview_res.headers.get("content-security-policy", "")
         assert len(preview_res.content) > 0
 
+    # --- Tests against the API app for artifact downloads ---
+    api_transport = ASGITransport(app=app)
+    async with AsyncClient(transport=api_transport, base_url="http://test") as api_client:
         # 3. Mobile APK download
-        apk_res = await client.get("/api/v1/mobile-builds/6ab5798778d2f5d6ea36276c/download")
+        apk_res = await api_client.get(f"/api/v1/mobile-builds/{mobile_build_id}/download")
         assert apk_res.status_code == 200
         assert apk_res.headers.get("content-type") == "application/vnd.android.package-archive"
         assert len(apk_res.content) > 0
 
         # 4. Mobile project source ZIP download
-        zip_res = await client.get("/api/v1/mobile-builds/6ab5798778d2f5d6ea36276c/download/source")
+        zip_res = await api_client.get(f"/api/v1/mobile-builds/{mobile_build_id}/download/source")
         assert zip_res.status_code == 200
         assert zip_res.headers.get("content-type") == "application/zip"
         assert len(zip_res.content) > 0
-
 
