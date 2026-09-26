@@ -152,22 +152,26 @@ dependencies {{
             f.write(f"""package {package_id}
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
+import android.net.http.SslError
 import android.os.Bundle
 import android.view.View
+import android.webkit.SslErrorHandler
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.FrameLayout
-import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 
 class MainActivity : AppCompatActivity() {{
     private lateinit var webView: WebView
     private lateinit var swipeRefresh: SwipeRefreshLayout
+    private val targetUrl = "{website_url}"
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {{
@@ -178,14 +182,22 @@ class MainActivity : AppCompatActivity() {{
         swipeRefresh.addView(webView)
         setContentView(swipeRefresh)
 
-        // Modern WebView Settings
+        // Hardware Acceleration
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+
+        // Modern WebView Settings for Web App & SPA compatibility
         webView.settings.apply {{
             javaScriptEnabled = true
             domStorageEnabled = true
             databaseEnabled = true
+            allowFileAccess = true
+            allowContentAccess = true
+            useWideViewPort = true
+            loadWithOverviewMode = true
+            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            javaScriptCanOpenWindowsAutomatically = true
+            mediaPlaybackRequiresUserGesture = false
             cacheMode = WebSettings.LOAD_DEFAULT
-            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-            allowFileAccess = false
             userAgentString = userAgentString + " ZirefMobileApp/1.0"
         }}
 
@@ -193,13 +205,25 @@ class MainActivity : AppCompatActivity() {{
             webView.reload()
         }}
 
+        webView.webChromeClient = object : WebChromeClient() {{
+            override fun onProgressChanged(view: WebView?, newProgress: Int) {{
+                if (newProgress >= 100) {{
+                    swipeRefresh.isRefreshing = false
+                }}
+            }}
+        }}
+
         webView.webViewClient = object : WebViewClient() {{
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {{
-                swipeRefresh.isRefreshing = true
+                swipeRefresh.post {{ swipeRefresh.isRefreshing = true }}
             }}
 
             override fun onPageFinished(view: WebView?, url: String?) {{
                 swipeRefresh.isRefreshing = false
+            }}
+
+            override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {{
+                handler?.proceed()
             }}
 
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {{
@@ -207,21 +231,49 @@ class MainActivity : AppCompatActivity() {{
                 if (request?.isForMainFrame == true) {{
                     val offlineHtml = \"\"\"
                         <html>
-                        <head><meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <style>body{{font-family:sans-serif;background:#09090b;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;padding:20px;text-align:center}}button{{background:#0284c7;color:#fff;border:none;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer}}</style></head>
-                        <body><div><h2>Unable to Connect</h2><p>Please check your network connection.</p><button onclick="window.location.reload()">Retry</button></div></body>
+                        <head>
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <style>
+                            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #09090b; color: #ffffff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; text-align: center; }}
+                            h2 {{ font-size: 22px; margin-bottom: 8px; font-weight: 700; }}
+                            p {{ font-size: 14px; color: #a1a1aa; margin-bottom: 20px; }}
+                            button {{ background: #0284c7; color: #ffffff; border: none; padding: 12px 24px; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; }}
+                            button:active {{ opacity: 0.8; }}
+                        </style>
+                        </head>
+                        <body>
+                            <div>
+                                <h2>Unable to Connect</h2>
+                                <p>Please check your network connection and try again.</p>
+                                <button onclick="window.location.href='{website_url}'">Retry</button>
+                            </div>
+                        </body>
                         </html>
                     \"\"\".trimIndent()
-                    webView.loadDataWithBaseURL(null, offlineHtml, "text/html", "UTF-8", null)
+                    webView.loadDataWithBaseURL("{website_url}", offlineHtml, "text/html", "UTF-8", "{website_url}")
+                }}
+            }}
+
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {{
+                val url = request?.url?.toString() ?: return false
+                if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("file://") || url.startsWith("data:")) {{
+                    return false
+                }}
+                return try {{
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    startActivity(intent)
+                    true
+                }} catch (e: Exception) {{
+                    false
                 }}
             }}
         }}
 
-        webView.loadUrl("{website_url}")
+        webView.loadUrl(targetUrl)
     }}
 
     override fun onBackPressed() {{
-        if (webView.canGoBack()) {{
+        if (::webView.isInitialized && webView.canGoBack()) {{
             webView.goBack()
         }} else {{
             super.onBackPressed()

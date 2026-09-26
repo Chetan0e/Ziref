@@ -210,8 +210,12 @@ class MainActivity : AppCompatActivity() {{
         settings.domStorageEnabled = true
         settings.databaseEnabled = true
         settings.allowFileAccess = true
+        settings.allowContentAccess = true
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = true
+        settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        settings.javaScriptCanOpenWindowsAutomatically = true
+        settings.mediaPlaybackRequiresUserGesture = false
         settings.cacheMode = WebSettings.LOAD_DEFAULT
 
         webView.webViewClient = object : WebViewClient() {{
@@ -222,6 +226,10 @@ class MainActivity : AppCompatActivity() {{
             override fun onPageFinished(view: WebView?, url: String?) {{
                 progressBar.visibility = View.GONE
                 swipeRefresh.isRefreshing = false
+            }}
+
+            override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {{
+                handler?.proceed()
             }}
 
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {{
@@ -235,14 +243,15 @@ class MainActivity : AppCompatActivity() {{
 
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {{
                 val url = request?.url?.toString() ?: return false
-                val targetHost = Uri.parse(targetUrl).host
-
-                return if (url.contains(targetHost ?: "")) {{
-                    false
-                }} else {{
+                if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("file://") || url.startsWith("data:")) {{
+                    return false
+                }}
+                return try {{
                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
                     startActivity(intent)
                     true
+                }} catch (e: Exception) {{
+                    false
                 }}
             }}
         }}
