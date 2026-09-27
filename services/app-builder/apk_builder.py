@@ -4,9 +4,18 @@ import zipfile
 import asyncio
 import time
 import logging
-from datetime import datetime, timezone
+import struct
+import hashlib
+import base64
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any
 from bson import ObjectId
+
+from cryptography import x509
+from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.serialization import pkcs7
 
 from services.api.core.datetime_util import utc_now_iso
 from services.api.core.config import settings
@@ -14,6 +23,8 @@ from services.api.core.database import get_database
 from services.api.core.models import MobileAppStatus, LogLevel, BuildLogEvent
 from services.api.core.redis_client import publish_event
 from services.app_builder.android_generator import android_project_generator
+from services.app_builder.axml import axml_builder
+from services.app_builder.dex import build_minimal_dex
 
 logger = logging.getLogger("ziref.apk_builder")
 
@@ -133,17 +144,116 @@ class MobileBuildPipeline:
                 shutil.rmtree(workspace_dir, ignore_errors=True)
 
     def _create_apk_package(self, output_apk_path: str, config: Dict[str, Any], project_dir: str):
-        with zipfile.ZipFile(output_apk_path, 'w', zipfile.ZIP_DEFLATED) as apk:
-            manifest_path = os.path.join(project_dir, "app", "src", "main", "AndroidManifest.xml")
-            if os.path.exists(manifest_path):
-                apk.write(manifest_path, "AndroidManifest.xml")
+        package_id = config.get("package_id", "com.ziref.app")
+        app_name = config.get("app_name", "Ziref App")
+        version_code = int(config.get("version_code", 1))
+        version_name = config.get("version", "1.0.0")
+        website_url = config.get("website_url", "https://ziref.app")
+        permissions = config.get("permissions", [])
 
-            dex_header = b'dex\n035\x00' + b'\x00' * 1024
-            apk.writestr("classes.dex", dex_header)
+        # 1. Binary AXML AndroidManifest.xml
+        manifest_axml = axml_builder.build_manifest(
+            package_id=package_id,
+            app_name=app_name,
+            version_code=version_code,
+            version_name=version_name,
+            website_url=website_url,
+            permissions=permissions
+        )
 
-            apk.writestr("META-INF/MANIFEST.MF", f"Manifest-Version: 1.0\nCreated-By: Ziref Appify Engine 1.0\nPackage: {config['package_id']}\n")
-            apk.writestr("META-INF/CERT.SF", f"Signature-Version: 1.0\nCreated-By: Ziref\nSHA-256-Digest-Manifest: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n")
-            apk.writestr("META-INF/CERT.RSA", b'\x30\x82\x01\x00' + b'\x00' * 64)
-            apk.writestr("res/values/strings.xml", f"<resources><string name='app_name'>{config['app_name']}</string></resources>")
+        # 2. Valid DEX bytecode
+        classes_dex = build_minimal_dex(package_id)
+
+        # 3. Minimal resources.arsc
+        resources_arsc = self._build_resources_arsc(package_id)
+
+        # 4. XML Strings resource
+        res_strings = f'<?xml version="1.0" encoding="utf-8"?>\n<resources><string name="app_name">{app_name}</string></resources>'.encode("utf-8")
+
+        files_to_pack = {
+            "AndroidManifest.xml": manifest_axml,
+            "classes.dex": classes_dex,
+            "resources.arsc": resources_arsc,
+            "res/values/strings.xml": res_strings
+        }
+
+        # 5. Generate MANIFEST.MF
+        manifest_mf_lines = [
+            "Manifest-Version: 1.0",
+            "Created-By: 1.0 (Android)",
+            ""
+        ]
+        file_digests = {}
+        for filename, content in sorted(files_to_pack.items()):
+            digest = base64.b64encode(hashlib.sha256(content).digest()).decode("utf-8")
+            file_digests[filename] = digest
+            manifest_mf_lines.append(f"Name: {filename}")
+            manifest_mf_lines.append(f"SHA-256-Digest: {digest}")
+            manifest_mf_lines.append("")
+
+        manifest_mf_bytes = "\r\n".join(manifest_mf_lines).encode("utf-8")
+
+        # 6. Generate CERT.SF
+        mf_digest = base64.b64encode(hashlib.sha256(manifest_mf_bytes).digest()).decode("utf-8")
+        cert_sf_lines = [
+            "Signature-Version: 1.0",
+            "Created-By: 1.0 (Android)",
+            f"SHA-256-Digest-Manifest: {mf_digest}",
+            ""
+        ]
+        for filename, content in sorted(files_to_pack.items()):
+            section = f"Name: {filename}\r\nSHA-256-Digest: {file_digests[filename]}\r\n\r\n".encode("utf-8")
+            sec_digest = base64.b64encode(hashlib.sha256(section).digest()).decode("utf-8")
+            cert_sf_lines.append(f"Name: {filename}")
+            cert_sf_lines.append(f"SHA-256-Digest: {sec_digest}")
+            cert_sf_lines.append("")
+
+        cert_sf_bytes = "\r\n".join(cert_sf_lines).encode("utf-8")
+
+        # 7. PKCS7 RSA Signature
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = issuer = x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, app_name),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Ziref"),
+        ])
+        cert = x509.CertificateBuilder().subject_name(
+            subject
+        ).issuer_name(
+            issuer
+        ).public_key(
+            key.public_key()
+        ).serial_number(
+            x509.random_serial_number()
+        ).not_valid_before(
+            datetime.now(timezone.utc)
+        ).not_valid_after(
+            datetime.now(timezone.utc) + timedelta(days=3650)
+        ).add_extension(
+            x509.BasicConstraints(ca=False, path_length=None), critical=True
+        ).sign(key, hashes.SHA256())
+
+        cert_rsa_bytes = pkcs7.PKCS7SignatureBuilder().set_data(
+            cert_sf_bytes
+        ).add_signer(
+            cert, key, hashes.SHA256()
+        ).sign(serialization.Encoding.DER, options=[pkcs7.PKCS7Options.DetachedSignature])
+
+        files_to_pack["META-INF/MANIFEST.MF"] = manifest_mf_bytes
+        files_to_pack["META-INF/CERT.SF"] = cert_sf_bytes
+        files_to_pack["META-INF/CERT.RSA"] = cert_rsa_bytes
+
+        os.makedirs(os.path.dirname(os.path.abspath(output_apk_path)), exist_ok=True)
+        with zipfile.ZipFile(output_apk_path, "w", zipfile.ZIP_DEFLATED) as apk:
+            for filename, content in files_to_pack.items():
+                apk.writestr(filename, content)
+
+    def _build_resources_arsc(self, package_name: str) -> bytes:
+        sp_header = struct.pack("<HHIIIIII", 0x0001, 28, 28, 0, 0, 0, 28, 0)
+        pkg_name_encoded = package_name.encode("utf-16le")
+        pkg_name_padded = pkg_name_encoded + b"\x00" * (256 - len(pkg_name_encoded))
+        pkg_chunk_header = struct.pack("<HHII", 0x0200, 288, 288, 0x7f) + pkg_name_padded + struct.pack("<IIII", 0, 0, 0, 0)
+        total_size = 12 + len(sp_header) + len(pkg_chunk_header)
+        main_header = struct.pack("<HHII", 0x0002, 12, total_size, 1)
+        return main_header + sp_header + pkg_chunk_header
 
 mobile_build_pipeline = MobileBuildPipeline()
