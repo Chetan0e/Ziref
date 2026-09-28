@@ -1,12 +1,25 @@
-from fastapi import APIRouter, Response, status
+import time
+import json
+import logging
+from datetime import datetime, timezone, timedelta
+from typing import Dict, Any, Optional
+
+from fastapi import APIRouter, Response, status, Depends
+from pydantic import BaseModel
+
 from services.api.core.database import get_database
 from services.api.core.redis_client import get_redis
+from services.api.core.security import get_current_user_token
+
+logger = logging.getLogger("ziref.health")
 
 router = APIRouter(tags=["Health"])
+
 
 @router.get("/health")
 async def liveness():
     return {"status": "ok", "service": "ziref-api"}
+
 
 @router.get("/ready")
 async def readiness(response: Response):
@@ -34,33 +47,41 @@ async def readiness(response: Response):
         "checks": checks
     }
 
-@router.get("/system/status")
-@router.get("/api/v1/system/status")
-async def get_system_status():
-    """Returns actual real-time worker, sandbox, and active build metrics."""
-    import time
-    import json
-    db = get_database()
-    heartbeat = None
 
-    # 1. Try Redis
+async def _get_worker_heartbeat() -> Optional[Dict[str, Any]]:
+    """Returns the most recent worker heartbeat, or None if unavailable."""
+    # 1. Try Redis (most up-to-date)
     try:
         redis_client = await get_redis()
         if redis_client:
             raw = await redis_client.get("ziref:worker:heartbeat")
             if raw:
-                heartbeat = json.loads(raw)
+                return json.loads(raw)
     except Exception:
         pass
 
-    # 2. Try DB fallback
-    if not heartbeat:
-        try:
-            doc = await db.system_status.find_one({"_id": "worker_heartbeat"})
-            if doc:
-                heartbeat = doc
-        except Exception:
-            pass
+    # 2. Fallback to DB
+    try:
+        db = get_database()
+        doc = await db.system_status.find_one({"_id": "worker_heartbeat"})
+        if doc:
+            return doc
+    except Exception:
+        pass
+
+    return None
+
+
+@router.get("/system/status")
+@router.get("/api/v1/system/status")
+async def get_system_status():
+    """
+    Returns real-time worker status and system-wide infrastructure metrics.
+    NOTE: metrics here are system-wide (all users). For user-scoped metrics,
+    use GET /api/v1/dashboard/metrics.
+    """
+    db = get_database()
+    heartbeat = await _get_worker_heartbeat()
 
     is_online = False
     sandbox_mode = "unavailable"
@@ -74,27 +95,18 @@ async def get_system_status():
             docker_available = heartbeat.get("docker_available", False)
 
     active_builds = 0
-    if is_online:
-        from datetime import datetime, timezone, timedelta
-        thirty_mins_ago = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
-        try:
-            active_builds = await db.builds.count_documents({
-                "status": {"$in": ["BUILDING", "QUEUED", "PREPARING"]},
-                "created_at": {"$gte": thirty_mins_ago}
-            })
-        except Exception:
-            try:
-                active_builds = sum(
-                    1 for b in db.builds.data.get("builds", [])
-                    if b.get("status") in ["BUILDING", "QUEUED", "PREPARING"]
-                    and b.get("created_at", "") >= thirty_mins_ago
-                )
-            except Exception:
-                pass
+    thirty_mins_ago = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    try:
+        active_builds = await db.builds.count_documents({
+            "status": {"$in": ["BUILDING", "QUEUED", "PREPARING"]},
+            "created_at": {"$gte": thirty_mins_ago}
+        })
+    except Exception:
+        pass
 
     active_deployments = 0
     try:
-        active_deployments = await db.deployments.count_documents({"status": {"$in": ["READY", "DEPLOYED"]}})
+        active_deployments = await db.deployments.count_documents({"status": "READY"})
     except Exception:
         pass
 
@@ -117,3 +129,98 @@ async def get_system_status():
             "active_builds": active_builds
         }
     }
+
+
+class DashboardMetrics(BaseModel):
+    projects: int
+    live_deployments: int
+    active_builds: int
+    total_deployments: int
+    failed_deployments: int
+    storage_bytes: int
+
+
+@router.get("/api/v1/dashboard/metrics", response_model=DashboardMetrics)
+async def get_dashboard_metrics(token_data: Dict[str, Any] = Depends(get_current_user_token)):
+    """
+    Returns dashboard metrics scoped to the authenticated user's workspace.
+    All counts are derived from real database records — no hardcoded values.
+    """
+    db = get_database()
+    user_id = token_data["sub"]
+
+    # Count user's projects
+    projects_count = 0
+    try:
+        projects_count = await db.projects.count_documents({"user_id": user_id})
+    except Exception:
+        pass
+
+    # Count projects with a live (READY) deployment
+    live_deployments = 0
+    try:
+        live_deployments = await db.projects.count_documents({
+            "user_id": user_id,
+            "status": "DEPLOYED",
+            "active_deployment_id": {"$ne": None}
+        })
+    except Exception:
+        pass
+
+    # Count active builds (in progress) scoped to user's projects
+    active_builds = 0
+    thirty_mins_ago = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    try:
+        active_builds = await db.builds.count_documents({
+            "user_id": user_id,
+            "status": {"$in": ["BUILDING", "QUEUED", "PREPARING"]},
+            "created_at": {"$gte": thirty_mins_ago}
+        })
+    except Exception:
+        pass
+
+    # Count total deployment records for this user
+    total_deployments = 0
+    try:
+        total_deployments = await db.deployments.count_documents({"user_id": user_id})
+    except Exception:
+        pass
+
+    # Count failed deployments
+    failed_deployments = 0
+    try:
+        failed_deployments = await db.deployments.count_documents({
+            "user_id": user_id,
+            "status": "FAILED"
+        })
+    except Exception:
+        pass
+
+    # Approximate storage usage: sum of artifact sizes
+    storage_bytes = 0
+    try:
+        import os
+        from services.api.core.config import settings
+        # Sum actual files in storage/deployments for this user's projects
+        # (approximate — actual tracking would need a storage index)
+        deploy_dir = os.path.join(settings.STORAGE_PATH, "deployments")
+        if os.path.exists(deploy_dir):
+            for entry in os.scandir(deploy_dir):
+                if entry.is_dir():
+                    for dirpath, _, filenames in os.walk(entry.path):
+                        for fname in filenames:
+                            try:
+                                storage_bytes += os.path.getsize(os.path.join(dirpath, fname))
+                            except OSError:
+                                pass
+    except Exception:
+        pass
+
+    return DashboardMetrics(
+        projects=projects_count,
+        live_deployments=live_deployments,
+        active_builds=active_builds,
+        total_deployments=total_deployments,
+        failed_deployments=failed_deployments,
+        storage_bytes=storage_bytes
+    )

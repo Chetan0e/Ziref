@@ -63,4 +63,50 @@ def test_apk_packaging(temp_dir):
         namelist = zf.namelist()
         assert "AndroidManifest.xml" in namelist
         assert "classes.dex" in namelist
+        assert "resources.arsc" in namelist
         assert "META-INF/MANIFEST.MF" in namelist
+        assert "META-INF/CERT.SF" in namelist
+        assert "META-INF/CERT.RSA" in namelist
+
+    # Verify APK structure verification helper
+    ok, err = mobile_build_pipeline._verify_apk_structure(apk_path)
+    assert ok is True, f"APK verification failed: {err}"
+
+    # Verify SHA-256 computation
+    sha256 = mobile_build_pipeline._sha256_file(apk_path)
+    assert len(sha256) == 64
+    assert all(c in "0123456789abcdef" for c in sha256)
+
+def test_dex_structure_integrity():
+    import struct, zlib, hashlib
+    from services.app_builder.dex import build_minimal_dex
+
+    dex = build_minimal_dex("com.example.testapp")
+    assert dex.startswith(b"dex\n035\x00")
+    assert len(dex) == 432
+
+    # Verify Adler32 checksum
+    checksum = zlib.adler32(dex[12:]) & 0xFFFFFFFF
+    stored_checksum = struct.unpack("<I", dex[8:12])[0]
+    assert checksum == stored_checksum
+
+    # Verify SHA-1 signature
+    sha1 = hashlib.sha1(dex[32:]).digest()
+    stored_sha1 = dex[12:32]
+    assert sha1 == stored_sha1
+
+def test_deployment_url_service_sanitization():
+    from services.api.core.deployment_url import deployment_url_service
+
+    assert deployment_url_service.generate_public_url("my-app") == "http://localhost:8000/sites/my-app/"
+    assert deployment_url_service.is_localhost_url("http://localhost:8000/sites/x/") is True
+    assert deployment_url_service.is_localhost_url("https://ziref.app/sites/x/") is False
+
+    ok, _ = deployment_url_service.sanitize_package_id("com.company.app")
+    assert ok is True
+    ok, _ = deployment_url_service.sanitize_package_id("invalid")
+    assert ok is False
+
+    filename = deployment_url_service.apk_filename("my-app", "1.2.0", 3)
+    assert filename == "my-app-1.2.0-3.apk"
+

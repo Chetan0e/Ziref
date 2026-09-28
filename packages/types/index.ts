@@ -112,7 +112,9 @@ export interface MobileApp {
   version_code: number;
   theme: string;
   orientation: string;
+  permissions?: string[];
   website_url: string;
+  website_url_is_localhost?: boolean;
   created_at: string;
 }
 
@@ -126,10 +128,29 @@ export interface MobileBuild {
   source_artifact_id?: string;
   apk_download_url?: string;
   source_download_url?: string;
+  apk_filename?: string;
+  apk_sha256?: string;
+  apk_size_bytes?: number;
+  apk_package_name?: string;
+  apk_version_name?: string;
+  apk_version_code?: number;
+  apk_signed?: boolean;
+  apk_verified?: boolean;
+  apk_target_url?: string;
+  apk_url_is_localhost?: boolean;
   error_message?: string;
   started_at?: string;
   completed_at?: string;
   created_at: string;
+}
+
+export interface DashboardMetrics {
+  projects: number;
+  live_deployments: number;
+  active_builds: number;
+  total_deployments: number;
+  failed_deployments: number;
+  storage_bytes: number;
 }
 
 export interface EnvVar {

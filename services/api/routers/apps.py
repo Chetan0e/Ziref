@@ -17,9 +17,11 @@ from services.api.core.database import get_database
 from services.api.core.security import get_current_user_token
 from services.api.core.models import MobileAppStatus
 from services.api.core.redis_client import push_job, subscribe_events
+from services.api.core.deployment_url import deployment_url_service
 from services.api.schemas.apps import MobileAppCreate, MobileAppResponse, MobileBuildResponse
 
 router = APIRouter(tags=["Appify (Mobile)"])
+
 
 @router.get("/projects/{project_id}/apps", response_model=List[MobileAppResponse])
 async def list_project_apps(project_id: str, token_data: Dict[str, Any] = Depends(get_current_user_token)):
@@ -56,21 +58,40 @@ async def create_mobile_app(
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
 
+    # Validate package ID
+    pkg_valid, pkg_reason = deployment_url_service.sanitize_package_id(payload.package_id.strip())
+    if not pkg_valid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid package ID: {pkg_reason}")
+
+    # Validate app name
+    name_valid, name_reason = deployment_url_service.sanitize_app_name(payload.app_name.strip())
+    if not name_valid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid app name: {name_reason}")
+
     slug = project["slug"]
-    website_url = project.get("active_url") or f"http://{slug}.{settings.BASE_DOMAIN}"
+
+    # Resolve the canonical deployment URL — stored by the deployer, never invented here
+    website_url = project.get("active_url")
+    if not website_url:
+        # No deployment yet — use the canonical URL that WILL be used when deployed
+        website_url = deployment_url_service.generate_public_url(slug)
+
+    # Warn if URL is localhost (APK will not be able to connect from a physical device)
+    is_localhost = deployment_url_service.is_localhost_url(website_url)
     now_str = utc_now_iso()
 
     doc = {
         "project_id": project_id,
         "user_id": token_data["sub"],
         "app_name": payload.app_name.strip(),
-        "package_id": payload.package_id.strip(),
+        "package_id": payload.package_id.strip().lower(),
         "version": payload.version,
         "version_code": payload.version_code,
         "theme": payload.theme,
         "orientation": payload.orientation,
         "permissions": payload.permissions or [],
         "website_url": website_url,
+        "website_url_is_localhost": is_localhost,
         "created_at": now_str,
         "updated_at": now_str
     }
@@ -91,6 +112,7 @@ async def create_mobile_app(
         website_url=doc["website_url"],
         created_at=doc["created_at"]
     )
+
 
 @router.post("/apps/{app_id}/build", response_model=MobileBuildResponse, status_code=status.HTTP_202_ACCEPTED)
 async def trigger_mobile_build(app_id: str, token_data: Dict[str, Any] = Depends(get_current_user_token)):
@@ -160,6 +182,16 @@ async def get_mobile_build(build_id: str, token_data: Dict[str, Any] = Depends(g
         source_artifact_id=b.get("source_artifact_id"),
         apk_download_url=apk_dl,
         source_download_url=src_dl,
+        apk_filename=b.get("apk_filename"),
+        apk_sha256=b.get("apk_sha256"),
+        apk_size_bytes=b.get("apk_size_bytes"),
+        apk_package_name=b.get("apk_package_name"),
+        apk_version_name=b.get("apk_version_name"),
+        apk_version_code=b.get("apk_version_code"),
+        apk_signed=b.get("apk_signed", False),
+        apk_verified=b.get("apk_verified", False),
+        apk_target_url=b.get("apk_target_url"),
+        apk_url_is_localhost=b.get("apk_url_is_localhost", False),
         error_message=b.get("error_message"),
         started_at=b.get("started_at"),
         completed_at=b.get("completed_at"),
@@ -192,6 +224,11 @@ async def stream_mobile_build_logs(build_id: str):
 @router.api_route("/mobile-builds/{build_id}/download", methods=["GET", "HEAD"])
 @router.api_route("/mobile-builds/{build_id}/download/{artifact_type}", methods=["GET", "HEAD"])
 async def download_mobile_artifact(build_id: str, artifact_type: str = "apk"):
+    """
+    Download APK or source ZIP for a completed mobile build.
+    Returns proper Content-Disposition, media type, and SHA-256 digest header.
+    """
+    from fastapi.responses import Response as FastAPIResponse
     db = get_database()
     b = None
     if ObjectId.is_valid(build_id):
@@ -199,24 +236,63 @@ async def download_mobile_artifact(build_id: str, artifact_type: str = "apk"):
     if not b:
         b = await db.mobile_builds.find_one({"_id": build_id})
 
+    if not b:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Build record not found")
+
+    if b.get("status") not in [MobileAppStatus.APP_READY.value]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Build is not ready for download (status: {b.get('status')})"
+        )
+
     is_apk = artifact_type.lower() in ["apk", "default", ""]
-    expected_filename = f"app-debug-{build_id}.apk" if is_apk else f"app-source-{build_id}.zip"
-    direct_disk_path = os.path.normpath(os.path.join(settings.STORAGE_PATH, "mobile", expected_filename))
 
     abs_path = None
-    if b:
-        rel_path = b.get("apk_artifact_id") if is_apk else b.get("source_artifact_id")
+    if is_apk:
+        rel_path = b.get("apk_artifact_id")
         if rel_path:
             candidate = os.path.normpath(os.path.join(settings.STORAGE_PATH, rel_path))
             if os.path.exists(candidate):
                 abs_path = candidate
-
-    if not abs_path and os.path.exists(direct_disk_path):
-        abs_path = direct_disk_path
+        # Legacy fallback for builds created before apk_filename was standardized
+        if not abs_path:
+            legacy_path = os.path.normpath(
+                os.path.join(settings.STORAGE_PATH, "mobile", f"app-debug-{build_id}.apk")
+            )
+            if os.path.exists(legacy_path):
+                abs_path = legacy_path
+    else:
+        rel_path = b.get("source_artifact_id")
+        if rel_path:
+            candidate = os.path.normpath(os.path.join(settings.STORAGE_PATH, rel_path))
+            if os.path.exists(candidate):
+                abs_path = candidate
+        if not abs_path:
+            legacy_path = os.path.normpath(
+                os.path.join(settings.STORAGE_PATH, "mobile", f"app-source-{build_id}.zip")
+            )
+            if os.path.exists(legacy_path):
+                abs_path = legacy_path
 
     if not abs_path:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact file not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact file not found on storage")
 
-    filename = os.path.basename(abs_path)
+    filename = b.get("apk_filename") if is_apk else os.path.basename(abs_path)
+    if not filename:
+        filename = os.path.basename(abs_path)
+
     media_type = "application/vnd.android.package-archive" if is_apk else "application/zip"
-    return FileResponse(abs_path, media_type=media_type, filename=filename)
+
+    # Add SHA-256 digest header if available (for integrity verification)
+    headers = {}
+    if is_apk and b.get("apk_sha256"):
+        headers["X-Content-SHA256"] = b["apk_sha256"]
+    if is_apk and b.get("apk_package_name"):
+        headers["X-APK-Package"] = b["apk_package_name"]
+    if is_apk and b.get("apk_version_name"):
+        headers["X-APK-Version"] = b["apk_version_name"]
+    if is_apk and b.get("apk_url_is_localhost"):
+        headers["X-APK-Warning"] = "target-url-is-localhost"
+
+    return FileResponse(abs_path, media_type=media_type, filename=filename, headers=headers)
+

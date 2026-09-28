@@ -23,6 +23,7 @@ class MobileAppResponse(BaseModel):
     orientation: str
     permissions: List[str] = []
     website_url: str
+    website_url_is_localhost: bool = False
     created_at: str
 
 class MobileBuildResponse(BaseModel):
@@ -35,7 +36,19 @@ class MobileBuildResponse(BaseModel):
     source_artifact_id: Optional[str] = None
     apk_download_url: Optional[str] = None
     source_download_url: Optional[str] = None
+    # APK artifact metadata (populated when status=APP_READY)
+    apk_filename: Optional[str] = None
+    apk_sha256: Optional[str] = None
+    apk_size_bytes: Optional[int] = None
+    apk_package_name: Optional[str] = None
+    apk_version_name: Optional[str] = None
+    apk_version_code: Optional[int] = None
+    apk_signed: bool = False
+    apk_verified: bool = False
+    apk_target_url: Optional[str] = None
+    apk_url_is_localhost: bool = False
     error_message: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     created_at: str
+

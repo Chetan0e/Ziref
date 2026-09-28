@@ -11,6 +11,7 @@ from services.api.core.config import settings
 from services.api.core.database import get_database
 from services.api.core.models import DeploymentStatus, ProjectStatus
 from services.api.core.redis_client import set_project_routing, publish_event
+from services.api.core.deployment_url import deployment_url_service
 
 logger = logging.getLogger("ziref.deployer")
 
@@ -28,9 +29,20 @@ class DeployerService:
             raise Exception(f"Project not found: {project_id}")
 
         slug = project["slug"]
-        subdomain = slug
-        public_url = f"http://{slug}.{settings.BASE_DOMAIN}"
-        fallback_url = f"{settings.API_PUBLIC_URL}/sites/{slug}/"
+
+        # --- SINGLE CANONICAL URL ---
+        # DeploymentUrlService is the only place deployment URLs are generated.
+        # Frontend displays what the API returns — never invents its own URL.
+        canonical_url = deployment_url_service.generate_public_url(slug)
+
+        # Idempotency guard: prevent duplicate deployments from the same build_id
+        existing_deployment = await db.deployments.find_one({"build_id": build_id})
+        if existing_deployment:
+            logger.warning(
+                f"Deployment for build_id={build_id} already exists "
+                f"({existing_deployment['_id']}). Skipping duplicate creation."
+            )
+            return str(existing_deployment["_id"])
 
         # Create Deployment Record
         deployment_doc = {
@@ -38,9 +50,8 @@ class DeployerService:
             "build_id": build_id,
             "user_id": project.get("user_id"),
             "status": DeploymentStatus.DEPLOYING.value,
-            "subdomain": subdomain,
-            "url": public_url,
-            "preview_url": fallback_url,
+            "subdomain": slug,
+            "url": canonical_url,
             "runtime": "static",
             "artifact_path": artifact_path,
             "created_at": utc_now_iso(),
@@ -49,6 +60,7 @@ class DeployerService:
 
         dep_res = await db.deployments.insert_one(deployment_doc)
         deployment_id = str(dep_res.inserted_id)
+
 
         target_deploy_dir = os.path.join(settings.STORAGE_PATH, "deployments", deployment_id)
         os.makedirs(target_deploy_dir, exist_ok=True)
@@ -106,13 +118,13 @@ class DeployerService:
                 {"$set": {
                     "status": ProjectStatus.DEPLOYED.value,
                     "active_deployment_id": deployment_id,
-                    "active_url": public_url,
-                    "preview_url": fallback_url,
+                    "active_url": canonical_url,
                     "updated_at": now_str
                 }}
             )
 
-            logger.info(f"Deployment {deployment_id} for project '{slug}' successfully deployed to {public_url}")
+            logger.info(f"Deployment {deployment_id} for project '{slug}' successfully deployed to {canonical_url}")
+
 
             # Dispatch outbound webhook
             try:
@@ -121,10 +133,11 @@ class DeployerService:
                 asyncio.create_task(webhook_dispatcher.dispatch_event(
                     project_id=project_id,
                     event_type="deployment.ready",
-                    data={"deployment_id": deployment_id, "url": public_url, "status": "READY"}
+                    data={"deployment_id": deployment_id, "url": canonical_url, "status": "READY"}
                 ))
             except Exception:
                 pass
+
 
             return deployment_id
 

@@ -7,6 +7,7 @@ import {
   EnvVar,
   User,
   AnalysisResult,
+  DashboardMetrics,
 } from '@ziref/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -543,6 +544,12 @@ class ApiClient {
   async getSystemStatus(): Promise<SystemStatus> {
     return this.request<SystemStatus>('/api/v1/system/status');
   }
+
+  async getDashboardMetrics(): Promise<DashboardMetrics> {
+    return this.request<DashboardMetrics>('/api/v1/dashboard/metrics');
+  }
 }
+
+export { type DashboardMetrics };
 
 export const api = new ApiClient();

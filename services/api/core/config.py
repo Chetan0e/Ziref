@@ -11,6 +11,13 @@ class Settings(BaseSettings):
     API_PUBLIC_URL: str = "http://localhost:8000"
     DASHBOARD_PUBLIC_URL: str = "http://localhost:3000"
 
+    # Canonical deployment URL base — the SINGLE source of truth for all deployment URLs.
+    # In development: http://localhost:8000/sites
+    # In production:  https://ziref.app/sites  (or https://{slug}.ziref.app with empty prefix)
+    PUBLIC_SITE_BASE_URL: str = "http://localhost:8000/sites"
+    # Domain suffix for subdomain-style routing in production (e.g. .ziref.app)
+    PUBLIC_DOMAIN_SUFFIX: str = ""
+
     # Databases
     MONGODB_URI: str = "mongodb://localhost:27017/ziref"
     REDIS_URL: str = "redis://localhost:6379/0"

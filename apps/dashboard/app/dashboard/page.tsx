@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, SystemStatus } from '@/lib/api';
-import { Project, Deployment } from '@ziref/types';
+import { Project, Deployment, DashboardMetrics } from '@ziref/types';
 import { useAuth } from '@/lib/auth';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { formatDate, formatRelativeTime } from '@/lib/date';
@@ -38,17 +38,20 @@ export default function DashboardOverviewPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [dashboardMetrics, setDashboardMetrics] = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const fetchDashboardData = async () => {
     try {
-      const [projs, sys] = await Promise.all([
+      const [projs, sys, metrics] = await Promise.all([
         api.getProjects(),
         api.getSystemStatus().catch(() => null),
+        api.getDashboardMetrics().catch(() => null),
       ]);
       setProjects(projs);
       setSystemStatus(sys);
+      setDashboardMetrics(metrics);
 
       // Fetch deployments across all user projects
       if (projs.length > 0) {
@@ -169,10 +172,10 @@ export default function DashboardOverviewPage() {
             <FolderGit2 className="w-4 h-4 text-[var(--text-tertiary)]" />
           </div>
           <div className="text-2xl font-bold text-[var(--text-primary)]">
-            {loading ? '—' : projects.length}
+            {loading ? '—' : (dashboardMetrics?.projects ?? projects.length)}
           </div>
           <div className="text-[11px] text-[var(--text-tertiary)] mt-1">
-            {projects.length === 0 ? 'No workspaces yet' : projects.length === 1 ? '1 active workspace' : `${projects.length} active workspaces`}
+            {(dashboardMetrics?.projects ?? projects.length) === 0 ? 'No workspaces yet' : (dashboardMetrics?.projects ?? projects.length) === 1 ? '1 active workspace' : `${dashboardMetrics?.projects ?? projects.length} active workspaces`}
           </div>
         </div>
 
@@ -183,10 +186,10 @@ export default function DashboardOverviewPage() {
             <Zap className="w-4 h-4 text-emerald-500" />
           </div>
           <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
-            {loading ? '—' : deployedCount}
+            {loading ? '—' : (dashboardMetrics?.live_deployments ?? deployedCount)}
           </div>
           <div className="text-[11px] text-[var(--text-tertiary)] mt-1">
-            {deployedCount > 0 ? `${deployedCount} active production ${deployedCount === 1 ? 'site' : 'sites'}` : 'No live deployments'}
+            {(dashboardMetrics?.live_deployments ?? deployedCount) > 0 ? `${dashboardMetrics?.live_deployments ?? deployedCount} active production ${(dashboardMetrics?.live_deployments ?? deployedCount) === 1 ? 'site' : 'sites'}` : 'No live deployments'}
           </div>
         </div>
 
@@ -197,10 +200,10 @@ export default function DashboardOverviewPage() {
             <Clock className="w-4 h-4 text-blue-500" />
           </div>
           <div className="text-2xl font-bold text-[var(--text-primary)]">
-            {loading ? '—' : buildingCount}
+            {loading ? '—' : (dashboardMetrics?.active_builds ?? buildingCount)}
           </div>
           <div className="text-[11px] text-[var(--text-tertiary)] mt-1">
-            {buildingCount > 0 ? `${buildingCount} build ${buildingCount === 1 ? 'job' : 'jobs'} in progress` : 'No active jobs in queue'}
+            {(dashboardMetrics?.active_builds ?? buildingCount) > 0 ? `${dashboardMetrics?.active_builds ?? buildingCount} build ${(dashboardMetrics?.active_builds ?? buildingCount) === 1 ? 'job' : 'jobs'} in progress` : 'No active jobs in queue'}
           </div>
         </div>
 
@@ -211,10 +214,10 @@ export default function DashboardOverviewPage() {
             <Layers className="w-4 h-4 text-indigo-500" />
           </div>
           <div className="text-2xl font-bold text-[var(--text-primary)]">
-            {loading ? '—' : deployments.length}
+            {loading ? '—' : (dashboardMetrics?.total_deployments ?? deployments.length)}
           </div>
           <div className="text-[11px] text-[var(--text-tertiary)] mt-1">
-            {deployments.length > 0 ? `${deployments.length} immutable ${deployments.length === 1 ? 'release' : 'releases'}` : 'No releases deployed yet'}
+            {(dashboardMetrics?.total_deployments ?? deployments.length) > 0 ? `${dashboardMetrics?.total_deployments ?? deployments.length} immutable ${(dashboardMetrics?.total_deployments ?? deployments.length) === 1 ? 'release' : 'releases'}` : 'No releases deployed yet'}
           </div>
         </div>
       </div>

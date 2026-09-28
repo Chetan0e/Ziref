@@ -179,14 +179,10 @@ export default function AppifyStudioPage() {
   };
 
   const previewUrl =
-    (selectedProject?.active_deployment_id ||
-      selectedProject?.status === 'DEPLOYED' ||
-      selectedProject?.active_url) &&
-    selectedProject?.slug
-      ? selectedProject.active_url && !selectedProject.active_url.includes('localhost')
-        ? selectedProject.active_url
-        : api.getPreviewUrl(selectedProject.slug)
+    selectedProject && (selectedProject.active_deployment_id || selectedProject.status === 'DEPLOYED' || selectedProject.active_url)
+      ? selectedProject.active_url || (selectedProject.slug ? api.getPreviewUrl(selectedProject.slug) : null)
       : null;
+
 
   return (
     <div className="space-y-6">
@@ -407,14 +403,27 @@ export default function AppifyStudioPage() {
 
                 {mobileBuild.status === 'APP_READY' && (
                   <div className="space-y-4 pt-2">
+                    {/* Warning if target URL is localhost */}
+                    {mobileBuild.apk_url_is_localhost && (
+                      <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-600 dark:text-amber-400 flex items-start gap-2.5">
+                        <Shield className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
+                        <div>
+                          <div className="font-semibold">Localhost Target Warning</div>
+                          <div className="text-[11px] opacity-90 mt-0.5 leading-relaxed">
+                            This APK embeds a local development URL ({mobileBuild.apk_target_url || 'localhost'}). On a physical Android device, &quot;localhost&quot; refers to the phone itself. To connect from your mobile device, ensure your phone is connected to the same Wi-Fi network and deploy with your computer&apos;s local IP address or a public domain.
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="flex flex-wrap items-center gap-3">
                       <a
                         href={api.getMobileApkDownloadUrl(mobileBuild.id)}
-                        download
+                        download={mobileBuild.apk_filename || undefined}
                         className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 transition-colors shadow-sm"
                       >
                         <Download className="w-4 h-4" />
-                        Download Android APK (.apk)
+                        <span>Download {mobileBuild.apk_filename || 'Android APK (.apk)'}</span>
                       </a>
                       <a
                         href={api.getMobileSourceDownloadUrl(mobileBuild.id)}
@@ -422,16 +431,45 @@ export default function AppifyStudioPage() {
                         className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] text-[var(--text-primary)] text-xs font-semibold hover:bg-[var(--surface-hover)] transition-colors shadow-sm"
                       >
                         <Download className="w-4 h-4" />
-                        Download Project Source (.zip)
+                        <span>Download Project Source (.zip)</span>
                       </a>
                     </div>
 
+                    {/* Artifact Details & ADB Command */}
                     <div className="p-4 bg-[var(--surface-muted)] rounded-xl border border-[var(--border)] space-y-3 font-mono text-xs">
+                      {mobileBuild.apk_package_name && (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pb-3 border-b border-[var(--border)] text-[11px]">
+                          <div>
+                            <span className="text-[var(--text-muted)] block text-[10px] uppercase font-sans">Package</span>
+                            <span className="text-[var(--text-primary)] font-mono">{mobileBuild.apk_package_name}</span>
+                          </div>
+                          <div>
+                            <span className="text-[var(--text-muted)] block text-[10px] uppercase font-sans">Version</span>
+                            <span className="text-[var(--text-primary)] font-mono">v{mobileBuild.apk_version_name || '1.0.0'} ({mobileBuild.apk_version_code || 1})</span>
+                          </div>
+                          <div>
+                            <span className="text-[var(--text-muted)] block text-[10px] uppercase font-sans">File Size</span>
+                            <span className="text-[var(--text-primary)] font-mono">
+                              {mobileBuild.apk_size_bytes ? `${(mobileBuild.apk_size_bytes / 1024).toFixed(1)} KB` : '—'}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {mobileBuild.apk_sha256 && (
+                        <div className="pb-2 border-b border-[var(--border)]">
+                          <span className="text-[var(--text-muted)] block text-[10px] uppercase font-sans mb-1">SHA-256 Checksum</span>
+                          <span className="text-[10px] text-[var(--text-secondary)] font-mono break-all block bg-black/30 p-1.5 rounded select-all">
+                            {mobileBuild.apk_sha256}
+                          </span>
+                        </div>
+                      )}
+
                       <div className="flex items-center justify-between">
                         <span className="text-[var(--text-muted)] text-[11px]">Install on Device via ADB:</span>
                         <button
                           onClick={() =>
-                            copyToClipboard(`adb install app-debug-${mobileBuild.id}.apk`, 'adb')
+                            copyToClipboard(`adb install ${mobileBuild.apk_filename || `app-debug-${mobileBuild.id}.apk`}`, 'adb')
                           }
                           className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center gap-1 text-[11px]"
                         >
@@ -444,7 +482,7 @@ export default function AppifyStudioPage() {
                         </button>
                       </div>
                       <div className="p-2 bg-black/60 rounded border border-[var(--border)] text-sky-400 select-all">
-                        adb install app-debug-{mobileBuild.id}.apk
+                        adb install {mobileBuild.apk_filename || `app-debug-${mobileBuild.id}.apk`}
                       </div>
                     </div>
                   </div>

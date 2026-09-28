@@ -15,10 +15,12 @@ from services.api.core.database import get_database
 from services.api.core.security import get_current_user_token
 from services.api.core.models import ProjectStatus, BuildStatus
 from services.api.core.redis_client import push_job
+from services.api.core.deployment_url import deployment_url_service
 from services.api.schemas.projects import ProjectCreate, ProjectUpdate, ProjectResponse
 from services.analyzer.archive_validator import archive_validator
 from services.analyzer.detector import project_detector
 from services.analyzer.git_importer import git_importer, GitSecurityError
+
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
@@ -41,7 +43,9 @@ async def list_projects(token_data: Dict[str, Any] = Depends(get_current_user_to
     projects = []
     async for p in cursor:
         slug = p["slug"]
-        active_url = p.get("active_url") or (f"http://{slug}.{settings.BASE_DOMAIN}" if p.get("active_deployment_id") else None)
+        # active_url is ONLY set by the deployer via deployment_url_service.
+        # Never invent a URL here — if it's None, the project has not been deployed yet.
+        active_url = p.get("active_url") or None
         projects.append(ProjectResponse(
             id=str(p["_id"]),
             name=p["name"],
@@ -58,6 +62,7 @@ async def list_projects(token_data: Dict[str, Any] = Depends(get_current_user_to
             updated_at=p.get("updated_at", "")
         ))
     return projects
+
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 async def create_project(payload: ProjectCreate, token_data: Dict[str, Any] = Depends(get_current_user_token)):
@@ -301,13 +306,13 @@ async def get_project(id_or_slug: str, token_data: Dict[str, Any] = Depends(get_
     db = get_database()
     project = await _resolve_user_project(db, id_or_slug, token_data["sub"])
 
-    slug = project["slug"]
-    active_url = project.get("active_url") or (f"http://{slug}.{settings.BASE_DOMAIN}" if project.get("active_deployment_id") else None)
+    # active_url is set by the deployer; never invent it here
+    active_url = project.get("active_url") or None
 
     return ProjectResponse(
         id=str(project["_id"]),
         name=project["name"],
-        slug=slug,
+        slug=project["slug"],
         status=project.get("status", ProjectStatus.CREATED.value),
         framework=project.get("framework"),
         language=project.get("language"),
@@ -319,6 +324,7 @@ async def get_project(id_or_slug: str, token_data: Dict[str, Any] = Depends(get_
         created_at=project.get("created_at", ""),
         updated_at=project.get("updated_at", "")
     )
+
 
 @router.patch("/{id_or_slug}", response_model=ProjectResponse)
 async def update_project(id_or_slug: str, payload: ProjectUpdate, token_data: Dict[str, Any] = Depends(get_current_user_token)):
