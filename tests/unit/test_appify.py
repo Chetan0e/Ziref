@@ -110,3 +110,41 @@ def test_deployment_url_service_sanitization():
     filename = deployment_url_service.apk_filename("my-app", "1.2.0", 3)
     assert filename == "my-app-1.2.0-3.apk"
 
+def test_app_icon_generation_and_badging(temp_dir):
+    import base64
+    import io
+    from PIL import Image
+
+    # Create a tiny 32x32 red PNG in base64
+    img = Image.new("RGBA", (32, 32), (255, 0, 0, 255))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    b64_icon = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+    config = {
+        "app_name": "Icon Test App",
+        "package_id": "com.ziref.icontest",
+        "version": "1.0.0",
+        "version_code": 1,
+        "website_url": "https://test.ziref.app",
+        "icon_base64": b64_icon
+    }
+
+    proj_dir = android_project_generator.generate(config, os.path.join(temp_dir, "proj_icon"))
+    res_dir = os.path.join(proj_dir, "app", "src", "main", "res")
+
+    # Verify density mipmaps generated
+    for density in ["mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"]:
+        icon_path = os.path.join(res_dir, f"mipmap-{density}", "ic_launcher.png")
+        round_icon_path = os.path.join(res_dir, f"mipmap-{density}", "ic_launcher_round.png")
+        assert os.path.exists(icon_path), f"Missing {icon_path}"
+        assert os.path.exists(round_icon_path), f"Missing {round_icon_path}"
+
+    apk_path = os.path.join(temp_dir, "icon-app.apk")
+    mobile_build_pipeline._create_apk_package(apk_path, config, proj_dir)
+
+    assert os.path.exists(apk_path)
+    ok, err = mobile_build_pipeline._verify_apk_structure(apk_path)
+    assert ok is True, f"Structure check failed: {err}"
+
+

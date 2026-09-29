@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, use, Suspense } from 'react';
+import React, { useEffect, useState, useRef, use, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { api, ApiError } from '@/lib/api';
@@ -41,6 +41,7 @@ import {
   Shield,
   Clock,
   Radio,
+  UploadCloud,
 } from 'lucide-react';
 
 type TabType =
@@ -124,6 +125,9 @@ function ProjectDetailContent({ params }: { params: Promise<{ id: string }> }) {
   const [appTheme, setAppTheme] = useState('system');
   const [appOrientation, setAppOrientation] = useState('portrait');
   const [appPermissions, setAppPermissions] = useState<string[]>([]);
+  const [appLogo, setAppLogo] = useState<string | null>(null);
+  const [logoFileName, setLogoFileName] = useState<string>('');
+  const mobileLogoInputRef = useRef<HTMLInputElement>(null);
   const [isBuildingApp, setIsBuildingApp] = useState(false);
   const [mobileBuild, setMobileBuild] = useState<MobileBuild | null>(null);
   const [mobileLogs, setMobileLogs] = useState<any[]>([]);
@@ -446,6 +450,45 @@ function ProjectDetailContent({ params }: { params: Promise<{ id: string }> }) {
     }
   };
 
+  const handleMobileLogoFile = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      addToast({
+        title: 'Invalid file format',
+        description: 'Please upload an image file (PNG, JPG, WebP, SVG).',
+        type: 'error',
+      });
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      addToast({
+        title: 'File too large',
+        description: 'Image size must be less than 5MB.',
+        type: 'error',
+      });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = e.target?.result as string;
+      setAppLogo(result);
+      setLogoFileName(file.name);
+      addToast({
+        title: 'App Icon Loaded',
+        description: `Successfully loaded '${file.name}' for mobile packaging.`,
+        type: 'success',
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveMobileLogo = () => {
+    setAppLogo(null);
+    setLogoFileName('');
+    if (mobileLogoInputRef.current) {
+      mobileLogoInputRef.current.value = '';
+    }
+  };
+
   const handleCreateAndBuildApp = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsBuildingApp(true);
@@ -457,6 +500,7 @@ function ProjectDetailContent({ params }: { params: Promise<{ id: string }> }) {
         theme: appTheme,
         orientation: appOrientation,
         permissions: appPermissions,
+        icon_base64: appLogo || undefined,
       });
 
       const build = await api.triggerMobileBuild(app.id);
@@ -1360,6 +1404,99 @@ function ProjectDetailContent({ params }: { params: Promise<{ id: string }> }) {
                       placeholder="com.company.app"
                       className="w-full px-3.5 py-2 bg-[var(--surface-muted)] border border-[var(--border)] rounded-lg text-xs text-[var(--text-primary)] font-mono focus:outline-none focus:border-purple-500"
                     />
+                  </div>
+                </div>
+
+                {/* App Logo / Launcher Icon Upload Section */}
+                <div className="p-4 rounded-xl border border-[var(--border)] bg-[var(--surface-muted)]/50 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="block text-xs font-semibold text-[var(--text-primary)]">
+                        App Logo & Launcher Icon
+                      </label>
+                      <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">
+                        Upload custom icon for the Android home screen, launcher, and system app drawer
+                      </p>
+                    </div>
+                    {appLogo && (
+                      <button
+                        type="button"
+                        onClick={handleRemoveMobileLogo}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-rose-500 hover:text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 rounded-md transition-colors"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Remove Icon</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row items-center gap-4">
+                    {/* Live Icon Previews */}
+                    <div className="flex items-center gap-3 shrink-0">
+                      <div className="flex flex-col items-center gap-1">
+                        <div className="w-14 h-14 rounded-2xl bg-zinc-800 border border-[var(--border)] overflow-hidden flex items-center justify-center shadow-md relative">
+                          {appLogo ? (
+                            <img src={appLogo} alt="App Icon" className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white font-bold text-lg select-none">
+                              {appName ? appName[0].toUpperCase() : 'Z'}
+                            </div>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-[var(--text-muted)] font-mono">Squircle</span>
+                      </div>
+
+                      <div className="flex flex-col items-center gap-1">
+                        <div className="w-14 h-14 rounded-full bg-zinc-800 border border-[var(--border)] overflow-hidden flex items-center justify-center shadow-md relative">
+                          {appLogo ? (
+                            <img src={appLogo} alt="App Round Icon" className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white font-bold text-lg select-none">
+                              {appName ? appName[0].toUpperCase() : 'Z'}
+                            </div>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-[var(--text-muted)] font-mono">Round</span>
+                      </div>
+                    </div>
+
+                    {/* Upload Dropzone */}
+                    <div
+                      onClick={() => mobileLogoInputRef.current?.click()}
+                      onDragOver={(e) => { e.preventDefault(); }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (e.dataTransfer.files?.[0]) {
+                          handleMobileLogoFile(e.dataTransfer.files[0]);
+                        }
+                      }}
+                      className="flex-1 w-full p-3.5 border-2 border-dashed border-[var(--border)] hover:border-purple-500/60 rounded-xl cursor-pointer bg-[var(--surface)] hover:bg-[var(--surface-hover)] transition-all flex flex-col items-center justify-center text-center group"
+                    >
+                      <input
+                        ref={mobileLogoInputRef}
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                        className="hidden"
+                        onChange={(e) => {
+                          if (e.target.files?.[0]) {
+                            handleMobileLogoFile(e.target.files[0]);
+                          }
+                        }}
+                      />
+                      <UploadCloud className="w-5 h-5 text-[var(--text-muted)] group-hover:text-purple-400 transition-colors mb-1" />
+                      <div className="text-xs text-[var(--text-primary)] font-medium">
+                        {logoFileName ? (
+                          <span className="text-purple-400 font-semibold">{logoFileName}</span>
+                        ) : (
+                          <>
+                            <span className="text-purple-400 underline decoration-purple-400/40">Click to upload logo</span> or drag and drop
+                          </>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
+                        PNG, JPG, WebP, SVG • 512×512px square recommended
+                      </p>
+                    </div>
                   </div>
                 </div>
 

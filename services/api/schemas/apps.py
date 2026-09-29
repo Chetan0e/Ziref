@@ -22,6 +22,7 @@ class MobileAppResponse(BaseModel):
     theme: str
     orientation: str
     permissions: List[str] = []
+    icon_base64: Optional[str] = None
     website_url: str
     website_url_is_localhost: bool = False
     created_at: str

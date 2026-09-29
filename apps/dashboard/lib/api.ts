@@ -407,6 +407,7 @@ class ApiClient {
       theme?: string;
       orientation?: string;
       permissions?: string[];
+      icon_base64?: string;
     }
   ): Promise<MobileApp> {
     return this.request<MobileApp>(`/api/v1/projects/${projectId}/apps`, {

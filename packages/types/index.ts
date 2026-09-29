@@ -113,6 +113,7 @@ export interface MobileApp {
   theme: string;
   orientation: string;
   permissions?: string[];
+  icon_base64?: string;
   website_url: string;
   website_url_is_localhost?: boolean;
   created_at: string;

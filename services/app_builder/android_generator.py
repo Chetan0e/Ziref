@@ -27,6 +27,7 @@ class AndroidProjectGenerator:
         theme = config.get("theme", "system")
         orientation = config.get("orientation", "portrait")
         user_permissions = config.get("permissions", [])
+        icon_base64 = config.get("icon_base64")
 
         abs_out = os.path.abspath(output_dir)
         os.makedirs(abs_out, exist_ok=True)
@@ -121,7 +122,14 @@ dependencies {{
 
         with open(os.path.join(main_dir, "AndroidManifest.xml"), "w", encoding="utf-8") as f:
             f.write(f"""<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="{package_id}"
+    android:versionCode="{version_code}"
+    android:versionName="{version}">
+
+    <uses-sdk
+        android:minSdkVersion="24"
+        android:targetSdkVersion="34" />
 
     {permissions_xml}
 
@@ -305,26 +313,15 @@ class MainActivity : AppCompatActivity() {{
         with open(os.path.join(values_dir, "themes.xml"), "w", encoding="utf-8") as f:
             f.write("""<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.ZirefApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Theme.ZirefApp" parent="@android:style/Theme.DeviceDefault.NoActionBar">
         <item name="android:statusBarColor">#09090B</item>
         <item name="android:navigationBarColor">#09090B</item>
     </style>
 </resources>
 """)
 
-        # Launcher icon vector drawables
-        initial_char = app_name[0].upper() if app_name else "Z"
-        with open(os.path.join(drawable_dir, "ic_launcher_foreground.xml"), "w", encoding="utf-8") as f:
-            f.write(f"""<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M34,34 L74,34 L74,74 L34,74 Z" />
-</vector>
-""")
+        # Generate mipmap launcher icons (supports custom user logo & branded fallbacks)
+        self._generate_app_icons(res_dir, app_name, icon_base64)
 
         # Adaptive icon descriptors
         for name in ["ic_launcher.xml", "ic_launcher_round.xml"]:
@@ -348,5 +345,104 @@ class MainActivity : AppCompatActivity() {{
 }}""")
 
         return abs_out
+
+    def _generate_app_icons(self, res_dir: str, app_name: str, icon_base64: Optional[str] = None) -> None:
+        """
+        Generates standard Android launcher icons for all screen densities:
+        - mdpi (48x48)
+        - hdpi (72x72)
+        - xhdpi (96x96)
+        - xxhdpi (144x144)
+        - xxxhdpi (192x192)
+        Both ic_launcher.png (standard) and ic_launcher_round.png (circular).
+        """
+        import io
+        density_sizes = {
+            "mipmap-mdpi": (48, 48),
+            "mipmap-hdpi": (72, 72),
+            "mipmap-xhdpi": (96, 96),
+            "mipmap-xxhdpi": (144, 144),
+            "mipmap-xxxhdpi": (192, 192),
+        }
+
+        drawable_dir = os.path.join(res_dir, "drawable")
+        os.makedirs(drawable_dir, exist_ok=True)
+
+        source_img = None
+        if icon_base64:
+            try:
+                # Strip data URL prefix if present
+                raw_b64 = icon_base64
+                if "," in raw_b64:
+                    raw_b64 = raw_b64.split(",", 1)[1]
+                img_data = base64.b64decode(raw_b64)
+                from PIL import Image
+                source_img = Image.open(io.BytesIO(img_data)).convert("RGBA")
+                logger.info(f"Loaded user app icon: {source_img.size[0]}x{source_img.size[1]} px")
+            except Exception as e:
+                logger.warning(f"Failed to decode custom app icon: {e}. Falling back to default.")
+                source_img = None
+
+        if source_img is None:
+            # Generate a clean, branded default app icon with Pillow
+            try:
+                from PIL import Image, ImageDraw, ImageFont
+                base_size = 512
+                source_img = Image.new("RGBA", (base_size, base_size), (2, 132, 199, 255))
+                draw = ImageDraw.Draw(source_img)
+
+                # Draw modern rounded accent inside
+                initial = (app_name[0].upper() if app_name else "Z")
+                # Draw lettermark
+                font_size = int(base_size * 0.45)
+                try:
+                    font = ImageFont.truetype("arial.ttf", font_size)
+                except Exception:
+                    font = ImageFont.load_default()
+                bbox = draw.textbbox((0, 0), initial, font=font)
+                text_w = bbox[2] - bbox[0]
+                text_h = bbox[3] - bbox[1]
+                x = (base_size - text_w) / 2
+                y = (base_size - text_h) / 2 - (bbox[1] if bbox[1] != 0 else 0)
+                draw.text((x, y), initial, fill=(255, 255, 255, 255), font=font)
+            except Exception as e:
+                logger.warning(f"Pillow fallback error: {e}")
+                source_img = None
+
+        # Write ic_launcher_foreground.xml vector fallback
+        initial_char = app_name[0].upper() if app_name else "Z"
+        with open(os.path.join(drawable_dir, "ic_launcher_foreground.xml"), "w", encoding="utf-8") as f:
+            f.write(f"""<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,34 L74,34 L74,74 L34,74 Z" />
+</vector>
+""")
+
+        if source_img:
+            from PIL import Image, ImageDraw
+            for folder_name, (w, h) in density_sizes.items():
+                target_dir = os.path.join(res_dir, folder_name)
+                os.makedirs(target_dir, exist_ok=True)
+
+                # 1. Standard square/squircle icon
+                resized = source_img.resize((w, h), Image.Resampling.LANCZOS)
+                standard_path = os.path.join(target_dir, "ic_launcher.png")
+                resized.save(standard_path, format="PNG")
+
+                # 2. Round icon (circular mask)
+                mask = Image.new("L", (w, h), 0)
+                mask_draw = ImageDraw.Draw(mask)
+                mask_draw.ellipse((0, 0, w - 1, h - 1), fill=255)
+                round_img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+                round_img.paste(resized, (0, 0), mask=mask)
+                round_path = os.path.join(target_dir, "ic_launcher_round.png")
+                round_img.save(round_path, format="PNG")
+
+        logger.info(f"Generated Android launcher mipmaps for: '{app_name}' (custom logo: {icon_base64 is not None})")
 
 android_project_generator = AndroidProjectGenerator()

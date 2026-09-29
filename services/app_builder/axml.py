@@ -83,7 +83,7 @@ class AXMLBuilder:
             res_id = res_id_map.get(idx, 0)
             res_map_data.extend(struct.pack("<I", res_id))
 
-        res_map_chunk = struct.pack("<HHII", 0x0180, 0x0008, 8 + len(res_map_data), len(self.strings)) + res_map_data
+        res_map_chunk = struct.pack("<HHI", 0x0180, 0x0008, 8 + len(res_map_data)) + res_map_data
 
         # Build String Pool Chunk
         string_offsets = bytearray()
@@ -192,7 +192,7 @@ class AXMLBuilder:
         body.extend(struct.pack("<HHIIIII", 0x0101, 0x0010, 0x0018, 1, 0xFFFFFFFF, ns_prefix_idx, ns_uri_idx))
 
         total_axml_size = 8 + len(string_pool_chunk) + len(res_map_chunk) + len(body)
-        axml_header = struct.pack("<HHII", 0x0003, 0x0008, total_axml_size, 0)
+        axml_header = struct.pack("<HHI", 0x0003, 0x0008, total_axml_size)
 
         return axml_header + string_pool_chunk + res_map_chunk + body
 

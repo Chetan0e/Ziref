@@ -137,7 +137,8 @@ class MobileBuildPipeline:
                 "website_url": website_url,
                 "theme": app_doc.get("theme", "system"),
                 "orientation": app_doc.get("orientation", "portrait"),
-                "permissions": app_doc.get("permissions", [])
+                "permissions": app_doc.get("permissions", []),
+                "icon_base64": app_doc.get("icon_base64")
             }
 
             await emit_log("generation", f"Generating Android Kotlin project structure for '{app_config['app_name']}'...")
@@ -240,6 +241,115 @@ class MobileBuildPipeline:
                 h.update(chunk)
         return h.hexdigest()
 
+    def _detect_android_sdk_tools(self) -> Optional[Dict[str, str]]:
+        """
+        Detects Android SDK build-tools (aapt, zipalign, apksigner) and platform android.jar,
+        as well as a compatible Java JDK home.
+        """
+        import subprocess
+
+        candidates = [
+            os.environ.get("ANDROID_HOME"),
+            os.environ.get("ANDROID_SDK_ROOT"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Android\Sdk"),
+            r"C:\Users\Aris\AppData\Local\Android\Sdk",
+            os.path.expanduser("~/AppData/Local/Android/Sdk"),
+            "/usr/lib/android-sdk",
+        ]
+        sdk_dir = None
+        for c in candidates:
+            if c and os.path.isdir(c):
+                sdk_dir = os.path.normpath(c)
+                break
+
+        if not sdk_dir:
+            return None
+
+        # 1. Locate platform android.jar (prefer highest installed)
+        plat_dir = os.path.join(sdk_dir, "platforms")
+        android_jar = None
+        if os.path.isdir(plat_dir):
+            for p in sorted(os.listdir(plat_dir), reverse=True):
+                candidate = os.path.join(plat_dir, p, "android.jar")
+                if os.path.isfile(candidate):
+                    android_jar = candidate
+                    break
+
+        # 2. Locate build-tools (aapt, zipalign, apksigner)
+        bt_dir = os.path.join(sdk_dir, "build-tools")
+        aapt = None
+        zipalign = None
+        apksigner = None
+        if os.path.isdir(bt_dir):
+            for bt in sorted(os.listdir(bt_dir), reverse=True):
+                dir_path = os.path.join(bt_dir, bt)
+                a_cand = os.path.join(dir_path, "aapt.exe" if os.name == "nt" else "aapt")
+                z_cand = os.path.join(dir_path, "zipalign.exe" if os.name == "nt" else "zipalign")
+                s_cand = os.path.join(dir_path, "apksigner.bat" if os.name == "nt" else "apksigner")
+                if os.path.isfile(a_cand) and os.path.isfile(z_cand) and os.path.isfile(s_cand):
+                    aapt = a_cand
+                    zipalign = z_cand
+                    apksigner = s_cand
+                    break
+
+        # 3. Locate working Java home for apksigner
+        java_home = None
+        jh_candidates = [
+            r"C:\Program Files\Microsoft\jdk-17.0.20.8-hotspot",
+            os.environ.get("JAVA_HOME"),
+            r"C:\Program Files\Android\Android Studio2\jbr",
+            r"C:\Program Files\Android\Android Studio1\jbr",
+            r"C:\Program Files\Android\Android Studio\jbr",
+            r"C:\Program Files\Java\jdk-25.0.4",
+        ]
+        for jh in jh_candidates:
+            if jh and os.path.isdir(jh):
+                java_bin = os.path.join(jh, "bin", "java.exe" if os.name == "nt" else "java")
+                if os.path.isfile(java_bin):
+                    java_home = jh
+                    break
+
+        if not (android_jar and aapt and zipalign and apksigner and java_home):
+            return None
+
+        return {
+            "sdk_dir": sdk_dir,
+            "android_jar": android_jar,
+            "aapt": aapt,
+            "zipalign": zipalign,
+            "apksigner": apksigner,
+            "java_home": java_home
+        }
+
+    def _ensure_debug_keystore(self, java_home: str) -> str:
+        """
+        Ensures a standard debug keystore exists for signing APKs.
+        Uses alias 'cert' to align with standard META-INF/CERT.SF and CERT.RSA naming.
+        """
+        import subprocess
+        keystore_dir = os.path.join(settings.STORAGE_PATH, "keystores")
+        os.makedirs(keystore_dir, exist_ok=True)
+        keystore_path = os.path.join(keystore_dir, "debug.keystore")
+
+        if not os.path.exists(keystore_path):
+            keytool = os.path.join(java_home, "bin", "keytool.exe" if os.name == "nt" else "keytool")
+            cmd = [
+                keytool, "-genkeypair", "-v",
+                "-keystore", keystore_path,
+                "-storepass", "android",
+                "-alias", "cert",
+                "-keypass", "android",
+                "-keyalg", "RSA",
+                "-keysize", "2048",
+                "-validity", "10000",
+                "-dname", "CN=Ziref Debug,O=Ziref,C=US"
+            ]
+            env = os.environ.copy()
+            env["JAVA_HOME"] = java_home
+            subprocess.run(cmd, env=env, check=True, capture_output=True)
+
+        return keystore_path
+
     def _verify_apk_structure(self, apk_path: str) -> tuple[bool, str]:
         """
         Verify the APK is a valid ZIP file containing required Android entries.
@@ -259,16 +369,28 @@ class MobileBuildPipeline:
                     return False, "APK missing AndroidManifest.xml"
                 if "classes.dex" not in names:
                     return False, "APK missing classes.dex"
-                if not any(n.startswith("META-INF/") for n in names):
-                    return False, "APK missing META-INF signature directory"
+                if "resources.arsc" not in names:
+                    return False, "APK missing resources.arsc"
+
+                # Verify either META-INF signature files or APK v2/v3 signature block
+                has_meta_inf = any(n.startswith("META-INF/") for n in names)
+                with open(apk_path, "rb") as f:
+                    apk_tail = f.read()
+                    has_v2_sig = b"APK Sig Block 42" in apk_tail
+
+                if not (has_meta_inf or has_v2_sig):
+                    return False, "APK missing signature block or META-INF directory"
+
                 # Verify DEX magic bytes
                 dex_data = zf.read("classes.dex")
                 if not dex_data.startswith(b"dex\n"):
                     return False, f"classes.dex has wrong magic bytes: {dex_data[:8]!r}"
-                # Verify AXML magic for manifest
+
+                # Verify AXML magic for manifest (RES_XML_TYPE = 0x0003)
                 manifest_data = zf.read("AndroidManifest.xml")
-                if len(manifest_data) < 8:
-                    return False, "AndroidManifest.xml is too short"
+                if len(manifest_data) < 8 or manifest_data[:2] != b"\x03\x00":
+                    return False, "AndroidManifest.xml is not valid binary AXML"
+
                 return True, "ok"
         except zipfile.BadZipFile as e:
             return False, f"APK is not a valid ZIP file: {e}"
@@ -277,16 +399,85 @@ class MobileBuildPipeline:
 
     def _create_apk_package(self, output_apk_path: str, config: Dict[str, Any], project_dir: str):
         """
-        Creates a signed Android APK package (v1 / JAR signing).
+        Creates an Android APK package.
+        Prefers the Android SDK toolchain (aapt, zipalign, apksigner) with APK Signature
+        Scheme v2/v3 signing so packages install cleanly without parse errors on modern Android.
+        Falls back to a pure-Python compiler if SDK tools are unavailable.
+        """
+        tools = self._detect_android_sdk_tools()
+        if tools:
+            try:
+                self._build_with_android_sdk(output_apk_path, config, project_dir, tools)
+                logger.info(f"APK successfully generated via Android SDK tools: {output_apk_path}")
+                return
+            except Exception as e:
+                logger.warning(f"Android SDK build failed ({e}); falling back to pure-Python builder.")
 
-        The APK is a ZIP file containing:
-        - AndroidManifest.xml (binary AXML)
-        - classes.dex (Dalvik bytecode)
-        - resources.arsc (resource table)
-        - res/values/strings.xml
-        - META-INF/MANIFEST.MF
-        - META-INF/CERT.SF
-        - META-INF/CERT.RSA (PKCS7 detached signature)
+        self._build_with_python_fallback(output_apk_path, config, project_dir)
+
+    def _build_with_android_sdk(self, output_apk_path: str, config: Dict[str, Any], project_dir: str, tools: Dict[str, str]):
+        import subprocess
+
+        package_id = config.get("package_id", "com.ziref.app")
+        app_dir = os.path.join(project_dir, "app")
+        manifest_path = os.path.join(app_dir, "src", "main", "AndroidManifest.xml")
+        res_path = os.path.join(app_dir, "src", "main", "res")
+
+        temp_dir = os.path.join(project_dir, "build_apk_tmp")
+        os.makedirs(temp_dir, exist_ok=True)
+        raw_apk = os.path.join(temp_dir, "raw.apk")
+        aligned_apk = os.path.join(temp_dir, "aligned.apk")
+
+        # 1. Package resources and compiled binary manifest with aapt
+        cmd_aapt = [
+            tools["aapt"], "package", "-f",
+            "-M", manifest_path,
+            "-S", res_path,
+            "-I", tools["android_jar"],
+            "-F", raw_apk
+        ]
+        res_aapt = subprocess.run(cmd_aapt, capture_output=True, text=True)
+        if res_aapt.returncode != 0:
+            raise Exception(f"aapt failed: {res_aapt.stderr or res_aapt.stdout}")
+
+        # 2. Add classes.dex bytecode
+        classes_dex = build_minimal_dex(package_id)
+        with zipfile.ZipFile(raw_apk, "a") as zf:
+            zf.writestr("classes.dex", classes_dex)
+
+        # 3. 4-byte zip alignment (zipalign)
+        if os.path.exists(aligned_apk):
+            os.remove(aligned_apk)
+        cmd_zipalign = [tools["zipalign"], "-p", "-f", "4", raw_apk, aligned_apk]
+        res_zipalign = subprocess.run(cmd_zipalign, capture_output=True, text=True)
+        if res_zipalign.returncode != 0:
+            raise Exception(f"zipalign failed: {res_zipalign.stderr or res_zipalign.stdout}")
+
+        # 4. Sign with apksigner (v1, v2, and v3 schemes) using debug keystore
+        keystore_path = self._ensure_debug_keystore(tools["java_home"])
+        os.makedirs(os.path.dirname(os.path.abspath(output_apk_path)), exist_ok=True)
+
+        env = os.environ.copy()
+        env["JAVA_HOME"] = tools["java_home"]
+        cmd_sign = [
+            tools["apksigner"], "sign",
+            "--ks", keystore_path,
+            "--ks-pass", "pass:android",
+            "--ks-key-alias", "cert",
+            "--key-pass", "pass:android",
+            "--v1-signing-enabled", "true",
+            "--v2-signing-enabled", "true",
+            "--v3-signing-enabled", "true",
+            "--out", output_apk_path,
+            aligned_apk
+        ]
+        res_sign = subprocess.run(cmd_sign, env=env, capture_output=True, text=True)
+        if res_sign.returncode != 0:
+            raise Exception(f"apksigner failed: {res_sign.stderr or res_sign.stdout}")
+
+    def _build_with_python_fallback(self, output_apk_path: str, config: Dict[str, Any], project_dir: str):
+        """
+        Pure-Python APK packager and signer fallback.
         """
         package_id = config.get("package_id", "com.ziref.app")
         app_name = config.get("app_name", "Ziref App")
@@ -305,22 +496,36 @@ class MobileBuildPipeline:
             permissions=permissions
         )
 
-        # 2. Valid DEX bytecode (fixed structure)
+        # 2. Valid DEX bytecode
         classes_dex = build_minimal_dex(package_id)
 
-        # 3. Minimal resources.arsc
+        # 3. Structurally valid resources.arsc
         resources_arsc = self._build_resources_arsc(package_id)
 
         # 4. XML Strings resource
         res_strings = f'<?xml version="1.0" encoding="utf-8"?>\n<resources><string name="app_name">{app_name}</string></resources>'.encode("utf-8")
 
-        # Files to include in APK (before signing metadata)
+        # Files to include in APK
         files_to_pack = {
             "AndroidManifest.xml": manifest_axml,
             "classes.dex": classes_dex,
             "resources.arsc": resources_arsc,
             "res/values/strings.xml": res_strings
         }
+
+        # Pack any generated launcher icons from project_dir into the APK
+        res_root = os.path.join(project_dir, "app", "src", "main", "res")
+        if os.path.isdir(res_root):
+            for root, dirs, files in os.walk(res_root):
+                for f in files:
+                    full_p = os.path.join(root, f)
+                    rel_p = "res/" + os.path.relpath(full_p, res_root).replace("\\", "/")
+                    if rel_p not in files_to_pack:
+                        try:
+                            with open(full_p, "rb") as fh:
+                                files_to_pack[rel_p] = fh.read()
+                        except Exception:
+                            pass
 
         # 5. Generate MANIFEST.MF
         manifest_mf_lines = [
@@ -389,45 +594,43 @@ class MobileBuildPipeline:
 
         os.makedirs(os.path.dirname(os.path.abspath(output_apk_path)), exist_ok=True)
 
-        # Write APK using STORED compression for AndroidManifest.xml and classes.dex
-        # (Android requires these to be uncompressed for mmapping)
         with zipfile.ZipFile(output_apk_path, "w") as apk:
             for filename, content in files_to_pack.items():
-                # AndroidManifest.xml and classes.dex should be uncompressed (STORED)
-                # so Android can mmap them directly
                 if filename in ("AndroidManifest.xml", "classes.dex", "resources.arsc"):
                     apk.writestr(
-                        zipfile.ZipInfo(filename),  # no compression flag = STORED
+                        zipfile.ZipInfo(filename),
                         content,
                         compress_type=zipfile.ZIP_STORED
                     )
                 else:
                     apk.writestr(filename, content, compress_type=zipfile.ZIP_DEFLATED)
 
-        logger.info(f"APK created: {output_apk_path} ({os.path.getsize(output_apk_path)} bytes)")
+        logger.info(f"Pure-Python APK created: {output_apk_path} ({os.path.getsize(output_apk_path)} bytes)")
 
     def _build_resources_arsc(self, package_name: str) -> bytes:
         """
-        Build a minimal resources.arsc binary.
-        Structure: RES_TABLE_TYPE (file) → RES_TABLE_PACKAGE
-        This is a well-formed but minimal resource table.
+        Build a structurally compliant minimal resources.arsc binary table.
+        Structure: RES_TABLE_TYPE (file) -> RES_STRING_POOL_TYPE -> RES_TABLE_PACKAGE
         """
-        # RES_TABLE_STRING_POOL_TYPE: an empty string pool
+        # Empty string pool (28 bytes)
         sp_header = struct.pack("<HHIIIIII", 0x0001, 28, 28, 0, 0, 0, 28, 0)
 
-        # RES_TABLE_PACKAGE_TYPE: package block
+        # Package chunk: 288-byte ResTable_package header + 2 empty string pools (typeStrings and keyStrings)
         pkg_name_encoded = package_name.encode("utf-16le")
         pkg_name_padded = pkg_name_encoded + b"\x00" * (256 - len(pkg_name_encoded))
-        pkg_chunk_header = (
-            struct.pack("<HHII", 0x0200, 288, 288, 0x7F) +
+        pkg_chunk = (
+            struct.pack("<HHI", 0x0200, 288, 288 + 28 + 28) +
+            struct.pack("<I", 0x7F) +
             pkg_name_padded +
-            struct.pack("<IIIIII", 288, 0, 0, 0, 0, 0)
+            struct.pack("<IIIII", 288, 0, 288 + 28, 0, 0) +
+            sp_header +  # typeStrings pool at offset 288
+            sp_header    # keyStrings pool at offset 316
         )
 
-        total_size = 12 + len(sp_header) + len(pkg_chunk_header)
-        main_header = struct.pack("<HHII", 0x0002, 12, total_size, 1)
-
-        return main_header + sp_header + pkg_chunk_header
+        total_size = 12 + len(sp_header) + len(pkg_chunk)
+        main_header = struct.pack("<HHI", 0x0002, 12, total_size) + struct.pack("<I", 1)
+        return main_header + sp_header + pkg_chunk
 
 
 mobile_build_pipeline = MobileBuildPipeline()
+

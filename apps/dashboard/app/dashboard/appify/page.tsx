@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { Project, MobileApp, MobileBuild } from '@ziref/types';
@@ -23,6 +23,10 @@ import {
   ChevronRight,
   Shield,
   Layers,
+  Image as ImageIcon,
+  UploadCloud,
+  X,
+  Trash2,
 } from 'lucide-react';
 
 export default function AppifyStudioPage() {
@@ -35,6 +39,10 @@ export default function AppifyStudioPage() {
   const [appTheme, setAppTheme] = useState('system');
   const [appOrientation, setAppOrientation] = useState('portrait');
   const [appPermissions, setAppPermissions] = useState<string[]>([]);
+  const [appLogo, setAppLogo] = useState<string | null>(null);
+  const [logoFileName, setLogoFileName] = useState<string>('');
+  const [simulatorView, setSimulatorView] = useState<'app' | 'home'>('app');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [isBuildingApp, setIsBuildingApp] = useState(false);
   const [mobileBuild, setMobileBuild] = useState<MobileBuild | null>(null);
@@ -80,6 +88,45 @@ export default function AppifyStudioPage() {
     }
   };
 
+  const handleLogoFile = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      addToast({
+        title: 'Invalid file format',
+        description: 'Please upload an image file (PNG, JPG, WebP, SVG).',
+        type: 'error',
+      });
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      addToast({
+        title: 'File too large',
+        description: 'Image size must be less than 5MB.',
+        type: 'error',
+      });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = e.target?.result as string;
+      setAppLogo(result);
+      setLogoFileName(file.name);
+      addToast({
+        title: 'App Icon Loaded',
+        description: `Successfully loaded '${file.name}' for mobile packaging.`,
+        type: 'success',
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveLogo = () => {
+    setAppLogo(null);
+    setLogoFileName('');
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   const handleBuildApp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedProjectId) {
@@ -100,6 +147,7 @@ export default function AppifyStudioPage() {
         theme: appTheme,
         orientation: appOrientation,
         permissions: appPermissions,
+        icon_base64: appLogo || undefined,
       });
 
       const build = await api.triggerMobileBuild(app.id);
@@ -270,6 +318,99 @@ export default function AppifyStudioPage() {
                       placeholder="com.company.app"
                       className="w-full px-3.5 py-2 bg-[var(--surface-muted)] border border-[var(--border)] rounded-lg text-xs text-[var(--text-primary)] font-mono focus:outline-none focus:border-purple-500"
                     />
+                  </div>
+                </div>
+
+                {/* App Logo / Launcher Icon Upload Section */}
+                <div className="p-4 rounded-xl border border-[var(--border)] bg-[var(--surface-muted)]/50 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="block text-xs font-semibold text-[var(--text-primary)]">
+                        App Logo & Launcher Icon
+                      </label>
+                      <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">
+                        Upload custom icon for the Android home screen, launcher, and system app drawer
+                      </p>
+                    </div>
+                    {appLogo && (
+                      <button
+                        type="button"
+                        onClick={handleRemoveLogo}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-rose-500 hover:text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 rounded-md transition-colors"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Remove Icon</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row items-center gap-4">
+                    {/* Live Icon Previews */}
+                    <div className="flex items-center gap-3 shrink-0">
+                      <div className="flex flex-col items-center gap-1">
+                        <div className="w-14 h-14 rounded-2xl bg-zinc-800 border border-[var(--border)] overflow-hidden flex items-center justify-center shadow-md relative">
+                          {appLogo ? (
+                            <img src={appLogo} alt="App Icon" className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white font-bold text-lg select-none">
+                              {appName ? appName[0].toUpperCase() : 'Z'}
+                            </div>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-[var(--text-muted)] font-mono">Squircle</span>
+                      </div>
+
+                      <div className="flex flex-col items-center gap-1">
+                        <div className="w-14 h-14 rounded-full bg-zinc-800 border border-[var(--border)] overflow-hidden flex items-center justify-center shadow-md relative">
+                          {appLogo ? (
+                            <img src={appLogo} alt="App Round Icon" className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white font-bold text-lg select-none">
+                              {appName ? appName[0].toUpperCase() : 'Z'}
+                            </div>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-[var(--text-muted)] font-mono">Round</span>
+                      </div>
+                    </div>
+
+                    {/* Upload Dropzone */}
+                    <div
+                      onClick={() => fileInputRef.current?.click()}
+                      onDragOver={(e) => { e.preventDefault(); }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (e.dataTransfer.files?.[0]) {
+                          handleLogoFile(e.dataTransfer.files[0]);
+                        }
+                      }}
+                      className="flex-1 w-full p-3.5 border-2 border-dashed border-[var(--border)] hover:border-purple-500/60 rounded-xl cursor-pointer bg-[var(--surface)] hover:bg-[var(--surface-hover)] transition-all flex flex-col items-center justify-center text-center group"
+                    >
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                        className="hidden"
+                        onChange={(e) => {
+                          if (e.target.files?.[0]) {
+                            handleLogoFile(e.target.files[0]);
+                          }
+                        }}
+                      />
+                      <UploadCloud className="w-5 h-5 text-[var(--text-muted)] group-hover:text-purple-400 transition-colors mb-1" />
+                      <div className="text-xs text-[var(--text-primary)] font-medium">
+                        {logoFileName ? (
+                          <span className="text-purple-400 font-semibold">{logoFileName}</span>
+                        ) : (
+                          <>
+                            <span className="text-purple-400 underline decoration-purple-400/40">Click to upload logo</span> or drag and drop
+                          </>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
+                        PNG, JPG, WebP, SVG • 512×512px square recommended
+                      </p>
+                    </div>
                   </div>
                 </div>
 
@@ -499,9 +640,36 @@ export default function AppifyStudioPage() {
 
           {/* Interactive Native Phone Mockup Simulator */}
           <div className="lg:col-span-5 flex flex-col items-center">
-            <span className="text-xs text-[var(--text-secondary)] mb-3 font-medium">
-              Interactive Native Phone Mockup
-            </span>
+            <div className="flex items-center justify-between w-[300px] mb-2 px-1">
+              <span className="text-xs text-[var(--text-secondary)] font-medium">
+                Native Phone Preview
+              </span>
+              <div className="inline-flex rounded-lg bg-[var(--surface-muted)] p-0.5 border border-[var(--border)] text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => setSimulatorView('app')}
+                  className={`px-2 py-0.5 rounded-md font-medium transition-colors ${
+                    simulatorView === 'app'
+                      ? 'bg-purple-600 text-white shadow-sm'
+                      : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  App View
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSimulatorView('home')}
+                  className={`px-2 py-0.5 rounded-md font-medium transition-colors ${
+                    simulatorView === 'home'
+                      ? 'bg-purple-600 text-white shadow-sm'
+                      : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  Home Screen
+                </button>
+              </div>
+            </div>
+
             <div className="w-[300px] h-[600px] bg-black border-4 border-zinc-700 rounded-[44px] shadow-2xl overflow-hidden relative flex flex-col">
               {/* Dynamic Island / Speaker notch */}
               <div className="w-28 h-5 bg-zinc-900 rounded-full mx-auto mt-2.5 z-20 flex items-center justify-center">
@@ -518,9 +686,58 @@ export default function AppifyStudioPage() {
                 </div>
               </div>
 
-              {/* In-Phone WebView Frame */}
-              <div className="flex-1 w-full mt-2 bg-zinc-950 overflow-hidden">
-                {previewUrl ? (
+              {/* In-Phone Screen Content */}
+              <div className="flex-1 w-full mt-2 bg-zinc-950 overflow-hidden relative">
+                {simulatorView === 'home' ? (
+                  <div className="w-full h-full bg-gradient-to-b from-indigo-950/60 via-zinc-950 to-zinc-950 p-6 flex flex-col justify-between select-none">
+                    {/* Clock & Widget */}
+                    <div className="text-center pt-8">
+                      <div className="text-4xl font-light text-white tracking-tight">09:41</div>
+                      <div className="text-xs text-zinc-400 mt-1">Monday, September 28</div>
+                    </div>
+
+                    {/* App Grid with Custom App Icon */}
+                    <div className="grid grid-cols-4 gap-4 pb-12">
+                      {/* User's Mobile App */}
+                      <div className="flex flex-col items-center gap-1.5 group cursor-pointer" onClick={() => setSimulatorView('app')}>
+                        <div className="w-12 h-12 rounded-2xl bg-zinc-800 border border-white/10 overflow-hidden shadow-lg flex items-center justify-center relative ring-2 ring-purple-500/50">
+                          {appLogo ? (
+                            <img src={appLogo} alt="App Icon" className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white font-bold text-base">
+                              {appName ? appName[0].toUpperCase() : 'Z'}
+                            </div>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-zinc-200 text-center font-medium truncate max-w-[56px]">
+                          {appName || 'App'}
+                        </span>
+                      </div>
+
+                      {/* Mock System Apps */}
+                      <div className="flex flex-col items-center gap-1.5 opacity-60">
+                        <div className="w-12 h-12 rounded-2xl bg-emerald-600 flex items-center justify-center text-white text-xs font-semibold shadow">
+                          📞
+                        </div>
+                        <span className="text-[10px] text-zinc-400">Phone</span>
+                      </div>
+
+                      <div className="flex flex-col items-center gap-1.5 opacity-60">
+                        <div className="w-12 h-12 rounded-2xl bg-sky-600 flex items-center justify-center text-white text-xs font-semibold shadow">
+                          💬
+                        </div>
+                        <span className="text-[10px] text-zinc-400">Messages</span>
+                      </div>
+
+                      <div className="flex flex-col items-center gap-1.5 opacity-60">
+                        <div className="w-12 h-12 rounded-2xl bg-amber-600 flex items-center justify-center text-white text-xs font-semibold shadow">
+                          ⚙️
+                        </div>
+                        <span className="text-[10px] text-zinc-400">Settings</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : previewUrl ? (
                   <iframe src={previewUrl} title="Phone Simulator" className="w-full h-full border-none" />
                 ) : (
                   <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center text-zinc-500 text-xs">

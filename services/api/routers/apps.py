@@ -39,6 +39,7 @@ async def list_project_apps(project_id: str, token_data: Dict[str, Any] = Depend
             theme=a.get("theme", "system"),
             orientation=a.get("orientation", "portrait"),
             permissions=a.get("permissions", []),
+            icon_base64=a.get("icon_base64"),
             website_url=a.get("website_url", ""),
             created_at=a.get("created_at", "")
         ))
@@ -90,6 +91,7 @@ async def create_mobile_app(
         "theme": payload.theme,
         "orientation": payload.orientation,
         "permissions": payload.permissions or [],
+        "icon_base64": payload.icon_base64,
         "website_url": website_url,
         "website_url_is_localhost": is_localhost,
         "created_at": now_str,
@@ -109,6 +111,7 @@ async def create_mobile_app(
         theme=doc["theme"],
         orientation=doc["orientation"],
         permissions=doc.get("permissions", []),
+        icon_base64=doc.get("icon_base64"),
         website_url=doc["website_url"],
         created_at=doc["created_at"]
     )
