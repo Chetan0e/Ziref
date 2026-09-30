@@ -275,25 +275,30 @@ class MobileBuildPipeline:
                     android_jar = candidate
                     break
 
-        # 2. Locate build-tools (aapt, zipalign, apksigner)
+        # 2. Locate build-tools (aapt, zipalign, apksigner, d8)
         bt_dir = os.path.join(sdk_dir, "build-tools")
         aapt = None
         zipalign = None
         apksigner = None
+        d8 = None
         if os.path.isdir(bt_dir):
             for bt in sorted(os.listdir(bt_dir), reverse=True):
                 dir_path = os.path.join(bt_dir, bt)
                 a_cand = os.path.join(dir_path, "aapt.exe" if os.name == "nt" else "aapt")
                 z_cand = os.path.join(dir_path, "zipalign.exe" if os.name == "nt" else "zipalign")
                 s_cand = os.path.join(dir_path, "apksigner.bat" if os.name == "nt" else "apksigner")
+                d_cand = os.path.join(dir_path, "d8.bat" if os.name == "nt" else "d8")
                 if os.path.isfile(a_cand) and os.path.isfile(z_cand) and os.path.isfile(s_cand):
                     aapt = a_cand
                     zipalign = z_cand
                     apksigner = s_cand
+                    if os.path.isfile(d_cand):
+                        d8 = d_cand
                     break
 
-        # 3. Locate working Java home for apksigner
+        # 3. Locate working Java home for apksigner and javac
         java_home = None
+        javac = None
         jh_candidates = [
             r"C:\Program Files\Microsoft\jdk-17.0.20.8-hotspot",
             os.environ.get("JAVA_HOME"),
@@ -307,6 +312,9 @@ class MobileBuildPipeline:
                 java_bin = os.path.join(jh, "bin", "java.exe" if os.name == "nt" else "java")
                 if os.path.isfile(java_bin):
                     java_home = jh
+                    javac_bin = os.path.join(jh, "bin", "javac.exe" if os.name == "nt" else "javac")
+                    if os.path.isfile(javac_bin):
+                        javac = javac_bin
                     break
 
         if not (android_jar and aapt and zipalign and apksigner and java_home):
@@ -318,7 +326,9 @@ class MobileBuildPipeline:
             "aapt": aapt,
             "zipalign": zipalign,
             "apksigner": apksigner,
-            "java_home": java_home
+            "java_home": java_home,
+            "javac": javac,
+            "d8": d8,
         }
 
     def _ensure_debug_keystore(self, java_home: str) -> str:
@@ -440,8 +450,59 @@ class MobileBuildPipeline:
         if res_aapt.returncode != 0:
             raise Exception(f"aapt failed: {res_aapt.stderr or res_aapt.stdout}")
 
-        # 2. Add classes.dex bytecode
-        classes_dex = build_minimal_dex(package_id)
+        # 2. Compile Java sources into classes.dex with javac + d8
+        classes_dex = None
+        if tools.get("javac") and tools.get("d8"):
+            try:
+                classes_dir = os.path.join(temp_dir, "classes")
+                os.makedirs(classes_dir, exist_ok=True)
+
+                java_sources = []
+                for root, dirs, files in os.walk(os.path.join(app_dir, "src", "main", "java")):
+                    for f in files:
+                        if f.endswith(".java"):
+                            java_sources.append(os.path.join(root, f))
+
+                if java_sources:
+                    cmd_javac = [
+                        tools["javac"],
+                        "-cp", tools["android_jar"],
+                        "-d", classes_dir,
+                        "-source", "1.8",
+                        "-target", "1.8",
+                    ] + java_sources
+                    res_javac = subprocess.run(cmd_javac, capture_output=True, text=True)
+                    if res_javac.returncode != 0:
+                        logger.warning(f"javac compilation warning/error: {res_javac.stderr}")
+                    else:
+                        dex_out_dir = os.path.join(temp_dir, "dex")
+                        os.makedirs(dex_out_dir, exist_ok=True)
+                        class_files = []
+                        for root, dirs, files in os.walk(classes_dir):
+                            for f in files:
+                                if f.endswith(".class"):
+                                    class_files.append(os.path.join(root, f))
+
+                        if class_files:
+                            env_d8 = os.environ.copy()
+                            env_d8["JAVA_HOME"] = tools["java_home"]
+                            cmd_d8 = [tools["d8"], "--output", dex_out_dir, "--min-api", "24"] + class_files
+                            res_d8 = subprocess.run(cmd_d8, env=env_d8, shell=True, capture_output=True, text=True)
+                            dex_file = os.path.join(dex_out_dir, "classes.dex")
+                            if res_d8.returncode == 0 and os.path.isfile(dex_file):
+                                with open(dex_file, "rb") as df:
+                                    classes_dex = df.read()
+                                logger.info(f"Successfully compiled classes.dex ({len(classes_dex)} bytes) using javac and d8")
+                            else:
+                                logger.warning(f"d8 failed: {res_d8.stderr}")
+            except Exception as e:
+                logger.warning(f"Failed to compile Java with SDK tools: {e}")
+
+        # Fallback to minimal DEX if javac/d8 unavailable
+        if not classes_dex:
+            logger.info("Using minimal DEX fallback")
+            classes_dex = build_minimal_dex(package_id)
+
         with zipfile.ZipFile(raw_apk, "a") as zf:
             zf.writestr("classes.dex", classes_dex)
 

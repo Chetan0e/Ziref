@@ -92,6 +92,12 @@ android {{
             isDebuggable = true
         }}
     }}
+
+    sourceSets {{
+        getByName("main") {{
+            java.exclude("**/MainActivity.java")
+        }}
+    }}
 }}
 
 dependencies {{
@@ -155,7 +161,7 @@ dependencies {{
 </manifest>
 """)
 
-        # 5. MainActivity.kt with SwipeRefresh & Offline handling
+        # 5a. MainActivity.kt for Kotlin Android Studio source zip
         with open(os.path.join(java_src_dir, "MainActivity.kt"), "w", encoding="utf-8") as f:
             f.write(f"""package {package_id}
 
@@ -178,22 +184,16 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 
 class MainActivity : AppCompatActivity() {{
     private lateinit var webView: WebView
-    private lateinit var swipeRefresh: SwipeRefreshLayout
     private val targetUrl = "{website_url}"
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {{
         super.onCreate(savedInstanceState)
-
-        swipeRefresh = SwipeRefreshLayout(this)
+        val swipeRefresh = SwipeRefreshLayout(this)
         webView = WebView(this)
         swipeRefresh.addView(webView)
         setContentView(swipeRefresh)
 
-        // Hardware Acceleration
-        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-
-        // Modern WebView Settings for Web App & SPA compatibility
         webView.settings.apply {{
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -209,74 +209,15 @@ class MainActivity : AppCompatActivity() {{
             userAgentString = userAgentString + " ZirefMobileApp/1.0"
         }}
 
-        swipeRefresh.setOnRefreshListener {{
-            webView.reload()
-        }}
-
-        webView.webChromeClient = object : WebChromeClient() {{
-            override fun onProgressChanged(view: WebView?, newProgress: Int) {{
-                if (newProgress >= 100) {{
-                    swipeRefresh.isRefreshing = false
-                }}
-            }}
-        }}
-
+        swipeRefresh.setOnRefreshListener {{ webView.reload() }}
         webView.webViewClient = object : WebViewClient() {{
-            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {{
-                swipeRefresh.post {{ swipeRefresh.isRefreshing = true }}
-            }}
-
             override fun onPageFinished(view: WebView?, url: String?) {{
                 swipeRefresh.isRefreshing = false
             }}
-
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {{
                 handler?.proceed()
             }}
-
-            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {{
-                swipeRefresh.isRefreshing = false
-                if (request?.isForMainFrame == true) {{
-                    val offlineHtml = \"\"\"
-                        <html>
-                        <head>
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <style>
-                            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #09090b; color: #ffffff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; text-align: center; }}
-                            h2 {{ font-size: 22px; margin-bottom: 8px; font-weight: 700; }}
-                            p {{ font-size: 14px; color: #a1a1aa; margin-bottom: 20px; }}
-                            button {{ background: #0284c7; color: #ffffff; border: none; padding: 12px 24px; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; }}
-                            button:active {{ opacity: 0.8; }}
-                        </style>
-                        </head>
-                        <body>
-                            <div>
-                                <h2>Unable to Connect</h2>
-                                <p>Please check your network connection and try again.</p>
-                                <button onclick="window.location.href='{website_url}'">Retry</button>
-                            </div>
-                        </body>
-                        </html>
-                    \"\"\".trimIndent()
-                    webView.loadDataWithBaseURL("{website_url}", offlineHtml, "text/html", "UTF-8", "{website_url}")
-                }}
-            }}
-
-            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {{
-                val url = request?.url?.toString() ?: return false
-                if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("file://") || url.startsWith("data:")) {{
-                    return false
-                }}
-                return try {{
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                    startActivity(intent)
-                    true
-                }} catch (e: Exception) {{
-                    false
-                }}
-            }}
         }}
-
         webView.loadUrl(targetUrl)
     }}
 
@@ -286,6 +227,190 @@ class MainActivity : AppCompatActivity() {{
         }} else {{
             super.onBackPressed()
         }}
+    }}
+}}
+""")
+
+        # 5b. MainActivity.java for fast, standalone SDK compilation (javac + d8) into classes.dex
+        with open(os.path.join(java_src_dir, "MainActivity.java"), "w", encoding="utf-8") as f:
+            f.write(f"""package {package_id};
+
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.net.Uri;
+import android.net.http.SslError;
+import android.os.Bundle;
+import android.view.View;
+import android.view.ViewGroup;
+import android.webkit.PermissionRequest;
+import android.webkit.SslErrorHandler;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
+import android.widget.ProgressBar;
+
+public class MainActivity extends Activity {{
+    private WebView webView;
+    private ProgressBar progressBar;
+    private final String targetUrl = "{website_url}";
+
+    @Override
+    @SuppressLint("SetJavaScriptEnabled")
+    protected void onCreate(Bundle savedInstanceState) {{
+        super.onCreate(savedInstanceState);
+
+        FrameLayout rootLayout = new FrameLayout(this);
+        rootLayout.setBackgroundColor(Color.parseColor("#09090B"));
+
+        webView = new WebView(this);
+        webView.setLayoutParams(new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        webView.setBackgroundColor(Color.parseColor("#09090B"));
+
+        WebSettings settings = webView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setDatabaseEnabled(true);
+        settings.setAllowFileAccess(true);
+        settings.setAllowContentAccess(true);
+        settings.setUseWideViewPort(true);
+        settings.setLoadWithOverviewMode(true);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        settings.setJavaScriptCanOpenWindowsAutomatically(true);
+        settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+        settings.setUserAgentString(settings.getUserAgentString() + " ZirefMobileApp/1.0");
+
+        progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progressBar.setLayoutParams(new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            8
+        ));
+        progressBar.setMax(100);
+        progressBar.setVisibility(View.GONE);
+
+        rootLayout.addView(webView);
+        rootLayout.addView(progressBar);
+        setContentView(rootLayout);
+
+        webView.setWebChromeClient(new WebChromeClient() {{
+            @Override
+            public void onProgressChanged(WebView view, int newProgress) {{
+                if (newProgress < 100) {{
+                    progressBar.setVisibility(View.VISIBLE);
+                    progressBar.setProgress(newProgress);
+                }} else {{
+                    progressBar.setVisibility(View.GONE);
+                }}
+            }}
+
+            @Override
+            public void onPermissionRequest(final PermissionRequest request) {{
+                try {{
+                    request.grant(request.getResources());
+                }} catch (Exception ignored) {{}}
+            }}
+        }});
+
+        webView.setWebViewClient(new WebViewClient() {{
+            @Override
+            public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {{
+                handler.proceed();
+            }}
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {{
+                String url = request.getUrl().toString();
+                if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("file://") || url.startsWith("data:")) {{
+                    return false;
+                }}
+                try {{
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                    startActivity(intent);
+                    return true;
+                }} catch (Exception e) {{
+                    return false;
+                }}
+            }}
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {{
+                if (request != null && request.isForMainFrame()) {{
+                    showOfflinePage(view, request.getUrl().toString());
+                }}
+            }}
+        }});
+
+        webView.loadUrl(targetUrl);
+    }}
+
+    private void showOfflinePage(WebView view, String failedUrl) {{
+        boolean isLocal = failedUrl != null && (failedUrl.contains("localhost") || failedUrl.contains("127.0.0.1"));
+        String hint = isLocal
+            ? "<p style='color:#eab308;font-size:13px;margin:12px 0;'>Notice: Target URL is set to localhost. Physical Android devices cannot connect to PC localhost directly. Make sure your PC and phone are on the same Wi-Fi and use your PC's IP address (e.g. http://192.168.x.x:8000), or deploy to a public URL.</p>"
+            : "<p style='color:#a1a1aa;font-size:14px;margin:12px 0;'>Please check your network connection and try again.</p>";
+
+        String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1.0'>"
+            + "<style>"
+            + "body{{font-family:-apple-system,BlinkMacSystemFont,\\"Segoe UI\\",Roboto,sans-serif;background:#09090b;color:#ffffff;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px;box-sizing:border-box;text-align:center;}}"
+            + ".card{{background:#18181b;border:1px solid #27272a;border-radius:16px;padding:32px 24px;max-width:420px;width:100%;box-shadow:0 10px 25px rgba(0,0,0,0.5);}}"
+            + "h2{{font-size:22px;margin:0 0 10px 0;font-weight:700;color:#f4f4f5;}}"
+            + "input{{width:100%;padding:12px;margin:14px 0;border-radius:8px;border:1px solid #3f3f46;background:#09090b;color:#fff;font-size:14px;box-sizing:border-box;}}"
+            + "button{{background:#0284c7;color:#ffffff;border:none;padding:12px 24px;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;width:100%;transition:background 0.2s;}}"
+            + "button:active{{background:#0369a1;}}"
+            + "</style></head><body>"
+            + "<div class='card'>"
+            + "<h2>Unable to Connect</h2>"
+            + hint
+            + "<input id='urlInput' type='text' value='" + (failedUrl != null ? failedUrl : targetUrl) + "' placeholder='http://192.168.x.x:8000/sites/...'>"
+            + "<button onclick='retryConnection()'>Connect / Retry</button>"
+            + "</div>"
+            + "<script>"
+            + "function retryConnection(){{"
+            + "  var url = document.getElementById('urlInput').value.trim();"
+            + "  if(url){{ window.location.href = url; }}"
+            + "}}"
+            + "</script>"
+            + "</body></html>";
+
+        view.loadDataWithBaseURL(failedUrl, html, "text/html", "UTF-8", failedUrl);
+    }}
+
+    @Override
+    public void onBackPressed() {{
+        if (webView != null && webView.canGoBack()) {{
+            webView.goBack();
+        }} else {{
+            super.onBackPressed();
+        }}
+    }}
+
+    @Override
+    protected void onPause() {{
+        super.onPause();
+        if (webView != null) webView.onPause();
+    }}
+
+    @Override
+    protected void onResume() {{
+        super.onResume();
+        if (webView != null) webView.onResume();
+    }}
+
+    @Override
+    protected void onDestroy() {{
+        if (webView != null) webView.destroy();
+        super.onDestroy();
     }}
 }}
 """)
@@ -301,10 +426,13 @@ class MainActivity : AppCompatActivity() {{
         with open(os.path.join(values_dir, "strings.xml"), "w", encoding="utf-8") as f:
             f.write(f"<resources><string name='app_name'>{app_name}</string></resources>")
 
+        # Generate mipmap launcher icons from user uploaded logo & detect background color
+        detected_bg_color = self._generate_app_icons(res_dir, app_name, icon_base64)
+
         with open(os.path.join(values_dir, "colors.xml"), "w", encoding="utf-8") as f:
-            f.write("""<?xml version="1.0" encoding="utf-8"?>
+            f.write(f"""<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#0284C7</color>
+    <color name="ic_launcher_background">{detected_bg_color}</color>
     <color name="primary">#0284C7</color>
     <color name="background">#09090B</color>
 </resources>
@@ -320,16 +448,13 @@ class MainActivity : AppCompatActivity() {{
 </resources>
 """)
 
-        # Generate mipmap launcher icons (supports custom user logo & branded fallbacks)
-        self._generate_app_icons(res_dir, app_name, icon_base64)
-
-        # Adaptive icon descriptors
+        # Adaptive icon descriptors point to the actual generated foreground mipmaps
         for name in ["ic_launcher.xml", "ic_launcher_round.xml"]:
             with open(os.path.join(mipmap_v26_dir, name), "w", encoding="utf-8") as f:
                 f.write("""<?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ic_launcher_background" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
 </adaptive-icon>
 """)
 
@@ -346,54 +471,71 @@ class MainActivity : AppCompatActivity() {{
 
         return abs_out
 
-    def _generate_app_icons(self, res_dir: str, app_name: str, icon_base64: Optional[str] = None) -> None:
+    def _generate_app_icons(self, res_dir: str, app_name: str, icon_base64: Optional[str] = None) -> str:
         """
         Generates standard Android launcher icons for all screen densities:
-        - mdpi (48x48)
-        - hdpi (72x72)
-        - xhdpi (96x96)
-        - xxhdpi (144x144)
-        - xxxhdpi (192x192)
-        Both ic_launcher.png (standard) and ic_launcher_round.png (circular).
+        - mdpi (48x48 icon, 108x108 adaptive foreground)
+        - hdpi (72x72 icon, 162x162 adaptive foreground)
+        - xhdpi (96x96 icon, 216x216 adaptive foreground)
+        - xxhdpi (144x144 icon, 324x324 adaptive foreground)
+        - xxxhdpi (192x192 icon, 432x432 adaptive foreground)
+
+        Generates:
+        - ic_launcher.png (exact user-uploaded logo)
+        - ic_launcher_round.png (circular crop of user logo)
+        - ic_launcher_foreground.png (properly centered adaptive layer)
+
+        Returns detected background color (hex string) for adaptive icon background.
         """
         import io
+        from PIL import Image, ImageDraw, ImageFont
+
         density_sizes = {
-            "mipmap-mdpi": (48, 48),
-            "mipmap-hdpi": (72, 72),
-            "mipmap-xhdpi": (96, 96),
-            "mipmap-xxhdpi": (144, 144),
-            "mipmap-xxxhdpi": (192, 192),
+            "mipmap-mdpi": ((48, 48), (108, 108)),
+            "mipmap-hdpi": ((72, 72), (162, 162)),
+            "mipmap-xhdpi": ((96, 96), (216, 216)),
+            "mipmap-xxhdpi": ((144, 144), (324, 324)),
+            "mipmap-xxxhdpi": ((192, 192), (432, 432)),
         }
 
-        drawable_dir = os.path.join(res_dir, "drawable")
-        os.makedirs(drawable_dir, exist_ok=True)
-
         source_img = None
+        detected_bg_color = "#0284C7"
+        has_trans = False
+
         if icon_base64:
             try:
-                # Strip data URL prefix if present
                 raw_b64 = icon_base64
                 if "," in raw_b64:
                     raw_b64 = raw_b64.split(",", 1)[1]
                 img_data = base64.b64decode(raw_b64)
-                from PIL import Image
                 source_img = Image.open(io.BytesIO(img_data)).convert("RGBA")
                 logger.info(f"Loaded user app icon: {source_img.size[0]}x{source_img.size[1]} px")
+
+                w_s, h_s = source_img.size
+                corner_samples = [
+                    source_img.getpixel((0, 0)),
+                    source_img.getpixel((w_s - 1, 0)),
+                    source_img.getpixel((0, h_s - 1)),
+                    source_img.getpixel((w_s - 1, h_s - 1)),
+                ]
+                has_trans = any(p[3] < 200 for p in corner_samples)
+
+                if has_trans:
+                    detected_bg_color = "#09090B"
+                else:
+                    top_left = corner_samples[0]
+                    detected_bg_color = f"#{top_left[0]:02X}{top_left[1]:02X}{top_left[2]:02X}"
             except Exception as e:
-                logger.warning(f"Failed to decode custom app icon: {e}. Falling back to default.")
+                logger.warning(f"Failed to decode custom app icon: {e}. Falling back to branded default.")
                 source_img = None
 
         if source_img is None:
             # Generate a clean, branded default app icon with Pillow
             try:
-                from PIL import Image, ImageDraw, ImageFont
                 base_size = 512
                 source_img = Image.new("RGBA", (base_size, base_size), (2, 132, 199, 255))
                 draw = ImageDraw.Draw(source_img)
-
-                # Draw modern rounded accent inside
                 initial = (app_name[0].upper() if app_name else "Z")
-                # Draw lettermark
                 font_size = int(base_size * 0.45)
                 try:
                     font = ImageFont.truetype("arial.ttf", font_size)
@@ -405,44 +547,51 @@ class MainActivity : AppCompatActivity() {{
                 x = (base_size - text_w) / 2
                 y = (base_size - text_h) / 2 - (bbox[1] if bbox[1] != 0 else 0)
                 draw.text((x, y), initial, fill=(255, 255, 255, 255), font=font)
+                detected_bg_color = "#0284C7"
+                has_trans = False
             except Exception as e:
                 logger.warning(f"Pillow fallback error: {e}")
-                source_img = None
+                return "#0284C7"
 
-        # Write ic_launcher_foreground.xml vector fallback
-        initial_char = app_name[0].upper() if app_name else "Z"
-        with open(os.path.join(drawable_dir, "ic_launcher_foreground.xml"), "w", encoding="utf-8") as f:
-            f.write(f"""<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M34,34 L74,34 L74,74 L34,74 Z" />
-</vector>
-""")
+        # Generate mipmaps for all densities
+        for folder_name, ((w, h), (fw, fh)) in density_sizes.items():
+            target_dir = os.path.join(res_dir, folder_name)
+            os.makedirs(target_dir, exist_ok=True)
 
-        if source_img:
-            from PIL import Image, ImageDraw
-            for folder_name, (w, h) in density_sizes.items():
-                target_dir = os.path.join(res_dir, folder_name)
-                os.makedirs(target_dir, exist_ok=True)
+            # 1. Standard square/exact icon (pure user logo)
+            resized = source_img.resize((w, h), Image.Resampling.LANCZOS)
+            standard_path = os.path.join(target_dir, "ic_launcher.png")
+            resized.save(standard_path, format="PNG")
 
-                # 1. Standard square/squircle icon
-                resized = source_img.resize((w, h), Image.Resampling.LANCZOS)
-                standard_path = os.path.join(target_dir, "ic_launcher.png")
-                resized.save(standard_path, format="PNG")
+            # 2. Round icon (smooth circular mask)
+            mask = Image.new("L", (w, h), 0)
+            mask_draw = ImageDraw.Draw(mask)
+            mask_draw.ellipse((0, 0, w - 1, h - 1), fill=255)
+            round_img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            round_img.paste(resized, (0, 0), mask=mask)
+            round_path = os.path.join(target_dir, "ic_launcher_round.png")
+            round_img.save(round_path, format="PNG")
 
-                # 2. Round icon (circular mask)
-                mask = Image.new("L", (w, h), 0)
-                mask_draw = ImageDraw.Draw(mask)
-                mask_draw.ellipse((0, 0, w - 1, h - 1), fill=255)
-                round_img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-                round_img.paste(resized, (0, 0), mask=mask)
-                round_path = os.path.join(target_dir, "ic_launcher_round.png")
-                round_img.save(round_path, format="PNG")
+            # 3. Adaptive icon foreground (centered within 72dp safe zone)
+            fg_canvas = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+            scale_ratio = 0.70 if has_trans else 0.74
+            target_max = int(min(fw, fh) * scale_ratio)
+            src_w, src_h = source_img.size
+            if src_w > src_h:
+                fit_w = target_max
+                fit_h = max(1, int(src_h * target_max / src_w))
+            else:
+                fit_h = target_max
+                fit_w = max(1, int(src_w * target_max / src_h))
 
-        logger.info(f"Generated Android launcher mipmaps for: '{app_name}' (custom logo: {icon_base64 is not None})")
+            fg_resized = source_img.resize((fit_w, fit_h), Image.Resampling.LANCZOS)
+            offset_x = (fw - fit_w) // 2
+            offset_y = (fh - fit_h) // 2
+            fg_canvas.paste(fg_resized, (offset_x, offset_y), mask=fg_resized if fg_resized.mode == "RGBA" else None)
+            fg_path = os.path.join(target_dir, "ic_launcher_foreground.png")
+            fg_canvas.save(fg_path, format="PNG")
+
+        logger.info(f"Generated Android launcher mipmaps for: '{app_name}' (custom logo: {icon_base64 is not None}, bg: {detected_bg_color})")
+        return detected_bg_color
 
 android_project_generator = AndroidProjectGenerator()

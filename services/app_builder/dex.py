@@ -271,7 +271,7 @@ def build_minimal_dex(package_id: str) -> bytes:
         type_main_idx,      # class_idx
         0x0001,             # access_flags: ACC_PUBLIC
         type_activity_idx,  # superclass_idx
-        0xFFFFFFFF,         # interfaces_off (none)
+        0x00000000,         # interfaces_off (none)
         0xFFFFFFFF,         # source_file_idx (none)
         0x00000000,         # annotations_off (none)
         class_data_off,     # class_data_off
