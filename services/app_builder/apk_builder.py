@@ -142,7 +142,12 @@ class MobileBuildPipeline:
             }
 
             await emit_log("generation", f"Generating Android Kotlin project structure for '{app_config['app_name']}'...")
-            project_dir = android_project_generator.generate(app_config, workspace_dir)
+            try:
+                project_dir = android_project_generator.generate(app_config, workspace_dir)
+                await emit_log("generation", f"Android project structure generated successfully at {project_dir}")
+            except Exception as e:
+                await emit_log("error", f"Failed to generate Android project: {str(e)}", level=LogLevel.ERROR)
+                raise
 
             # 4. Package Android Project Source Code into ZIP
             await emit_log("source_packaging", "Packaging full Android Studio source code (.zip)...")
@@ -547,21 +552,38 @@ class MobileBuildPipeline:
         website_url = config.get("website_url", "https://ziref.app")
         permissions = config.get("permissions", [])
 
+        logger.info(f"Building APK with Python fallback for {package_id}")
+
         # 1. Binary AXML AndroidManifest.xml
-        manifest_axml = axml_builder.build_manifest(
-            package_id=package_id,
-            app_name=app_name,
-            version_code=version_code,
-            version_name=version_name,
-            website_url=website_url,
-            permissions=permissions
-        )
+        try:
+            manifest_axml = axml_builder.build_manifest(
+                package_id=package_id,
+                app_name=app_name,
+                version_code=version_code,
+                version_name=version_name,
+                website_url=website_url,
+                permissions=permissions
+            )
+            logger.debug(f"Generated binary manifest: {len(manifest_axml)} bytes")
+        except Exception as e:
+            logger.error(f"Failed to generate manifest: {e}")
+            raise
 
         # 2. Valid DEX bytecode
-        classes_dex = build_minimal_dex(package_id)
+        try:
+            classes_dex = build_minimal_dex(package_id)
+            logger.debug(f"Generated DEX: {len(classes_dex)} bytes")
+        except Exception as e:
+            logger.error(f"Failed to generate DEX: {e}")
+            raise
 
         # 3. Structurally valid resources.arsc
-        resources_arsc = self._build_resources_arsc(package_id)
+        try:
+            resources_arsc = self._build_resources_arsc(package_id)
+            logger.debug(f"Generated resources.arsc: {len(resources_arsc)} bytes")
+        except Exception as e:
+            logger.error(f"Failed to generate resources.arsc: {e}")
+            raise
 
         # 4. XML Strings resource
         res_strings = f'<?xml version="1.0" encoding="utf-8"?>\n<resources><string name="app_name">{app_name}</string></resources>'.encode("utf-8")
@@ -576,6 +598,7 @@ class MobileBuildPipeline:
 
         # Pack any generated launcher icons from project_dir into the APK
         res_root = os.path.join(project_dir, "app", "src", "main", "res")
+        icons_packed = 0
         if os.path.isdir(res_root):
             for root, dirs, files in os.walk(res_root):
                 for f in files:
@@ -585,8 +608,11 @@ class MobileBuildPipeline:
                         try:
                             with open(full_p, "rb") as fh:
                                 files_to_pack[rel_p] = fh.read()
-                        except Exception:
-                            pass
+                                icons_packed += 1
+                                logger.debug(f"Packed resource: {rel_p}")
+                        except Exception as e:
+                            logger.warning(f"Failed to pack resource {rel_p}: {e}")
+        logger.info(f"Packed {icons_packed} resource files into APK")
 
         # 5. Generate MANIFEST.MF
         manifest_mf_lines = [
@@ -622,31 +648,41 @@ class MobileBuildPipeline:
         cert_sf_bytes = "\r\n".join(cert_sf_lines).encode("utf-8")
 
         # 7. Generate RSA key + self-signed certificate
-        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        subject = issuer = x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, "Ziref APK Signer"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Ziref"),
-            x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
-        ])
-        cert = (
-            x509.CertificateBuilder()
-            .subject_name(subject)
-            .issuer_name(issuer)
-            .public_key(key.public_key())
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(datetime.now(timezone.utc))
-            .not_valid_after(datetime.now(timezone.utc) + timedelta(days=3650))
-            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-            .sign(key, hashes.SHA256())
-        )
+        try:
+            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            subject = issuer = x509.Name([
+                x509.NameAttribute(NameOID.COMMON_NAME, "Ziref APK Signer"),
+                x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Ziref"),
+                x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+            ])
+            cert = (
+                x509.CertificateBuilder()
+                .subject_name(subject)
+                .issuer_name(issuer)
+                .public_key(key.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(datetime.now(timezone.utc))
+                .not_valid_after(datetime.now(timezone.utc) + timedelta(days=3650))
+                .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+                .sign(key, hashes.SHA256())
+            )
+            logger.debug("Generated RSA key and certificate")
+        except Exception as e:
+            logger.error(f"Failed to generate RSA key/certificate: {e}")
+            raise
 
         # 8. PKCS7 detached RSA signature over CERT.SF
-        cert_rsa_bytes = (
-            pkcs7.PKCS7SignatureBuilder()
-            .set_data(cert_sf_bytes)
-            .add_signer(cert, key, hashes.SHA256())
-            .sign(serialization.Encoding.DER, options=[pkcs7.PKCS7Options.DetachedSignature])
-        )
+        try:
+            cert_rsa_bytes = (
+                pkcs7.PKCS7SignatureBuilder()
+                .set_data(cert_sf_bytes)
+                .add_signer(cert, key, hashes.SHA256())
+                .sign(serialization.Encoding.DER, options=[pkcs7.PKCS7Options.DetachedSignature])
+            )
+            logger.debug(f"Generated PKCS7 signature: {len(cert_rsa_bytes)} bytes")
+        except Exception as e:
+            logger.error(f"Failed to generate PKCS7 signature: {e}")
+            raise
 
         # 9. Assemble full APK (ZIP file)
         files_to_pack["META-INF/MANIFEST.MF"] = manifest_mf_bytes
@@ -655,18 +691,22 @@ class MobileBuildPipeline:
 
         os.makedirs(os.path.dirname(os.path.abspath(output_apk_path)), exist_ok=True)
 
-        with zipfile.ZipFile(output_apk_path, "w") as apk:
-            for filename, content in files_to_pack.items():
-                if filename in ("AndroidManifest.xml", "classes.dex", "resources.arsc"):
-                    apk.writestr(
-                        zipfile.ZipInfo(filename),
-                        content,
-                        compress_type=zipfile.ZIP_STORED
-                    )
-                else:
-                    apk.writestr(filename, content, compress_type=zipfile.ZIP_DEFLATED)
-
-        logger.info(f"Pure-Python APK created: {output_apk_path} ({os.path.getsize(output_apk_path)} bytes)")
+        try:
+            with zipfile.ZipFile(output_apk_path, "w") as apk:
+                for filename, content in files_to_pack.items():
+                    if filename in ("AndroidManifest.xml", "classes.dex", "resources.arsc"):
+                        apk.writestr(
+                            zipfile.ZipInfo(filename),
+                            content,
+                            compress_type=zipfile.ZIP_STORED
+                        )
+                    else:
+                        apk.writestr(filename, content, compress_type=zipfile.ZIP_DEFLATED)
+            apk_size = os.path.getsize(output_apk_path)
+            logger.info(f"Pure-Python APK created: {output_apk_path} ({apk_size} bytes)")
+        except Exception as e:
+            logger.error(f"Failed to create APK ZIP: {e}")
+            raise
 
     def _build_resources_arsc(self, package_name: str) -> bytes:
         """

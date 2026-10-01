@@ -35,6 +35,11 @@ def test_android_project_generation(temp_dir):
         content = f.read()
         assert "com.ziref.testapp" in content or "package" in content or "android:name" in content
         assert "android.permission.INTERNET" in content
+        assert "networkSecurityConfig" in content  # Verify network security config is referenced
+
+    # Verify network security config file exists
+    network_config = os.path.join(app_dir, "src", "main", "res", "xml", "network_security_config.xml")
+    assert os.path.exists(network_config), "Network security config XML should be generated"
 
     main_activity = os.path.join(app_dir, "src", "main", "java", "com", "ziref", "testapp", "MainActivity.kt")
     assert os.path.exists(main_activity)
@@ -110,6 +115,26 @@ def test_deployment_url_service_sanitization():
     filename = deployment_url_service.apk_filename("my-app", "1.2.0", 3)
     assert filename == "my-app-1.2.0-3.apk"
 
+def test_icon_generation_with_invalid_base64(temp_dir):
+    """Test that icon generation handles invalid base64 gracefully"""
+    config = {
+        "app_name": "Fallback Icon App",
+        "package_id": "com.ziref.fallback",
+        "version": "1.0.0",
+        "version_code": 1,
+        "website_url": "https://test.ziref.app",
+        "icon_base64": "invalid_base64_string"
+    }
+
+    # Should not raise exception, should fall back to default icon
+    proj_dir = android_project_generator.generate(config, os.path.join(temp_dir, "proj_fallback"))
+    res_dir = os.path.join(proj_dir, "app", "src", "main", "res")
+
+    # Verify default icons were still generated
+    for density in ["mdpi", "hdpi"]:
+        icon_path = os.path.join(res_dir, f"mipmap-{density}", "ic_launcher.png")
+        assert os.path.exists(icon_path), f"Default icon should be generated even with invalid base64: {icon_path}"
+
 def test_app_icon_generation_and_badging(temp_dir):
     import base64
     import io
@@ -137,8 +162,15 @@ def test_app_icon_generation_and_badging(temp_dir):
     for density in ["mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"]:
         icon_path = os.path.join(res_dir, f"mipmap-{density}", "ic_launcher.png")
         round_icon_path = os.path.join(res_dir, f"mipmap-{density}", "ic_launcher_round.png")
+        fg_icon_path = os.path.join(res_dir, f"mipmap-{density}", "ic_launcher_foreground.png")
         assert os.path.exists(icon_path), f"Missing {icon_path}"
         assert os.path.exists(round_icon_path), f"Missing {round_icon_path}"
+        assert os.path.exists(fg_icon_path), f"Missing {fg_icon_path}"
+
+    # Verify adaptive icon XML descriptors
+    adaptive_dir = os.path.join(res_dir, "mipmap-anydpi-v26")
+    assert os.path.exists(os.path.join(adaptive_dir, "ic_launcher.xml"))
+    assert os.path.exists(os.path.join(adaptive_dir, "ic_launcher_round.xml"))
 
     apk_path = os.path.join(temp_dir, "icon-app.apk")
     mobile_build_pipeline._create_apk_package(apk_path, config, proj_dir)
@@ -146,5 +178,14 @@ def test_app_icon_generation_and_badging(temp_dir):
     assert os.path.exists(apk_path)
     ok, err = mobile_build_pipeline._verify_apk_structure(apk_path)
     assert ok is True, f"Structure check failed: {err}"
+
+    # Verify icons are actually inside the APK
+    with zipfile.ZipFile(apk_path, "r") as zf:
+        namelist = zf.namelist()
+        # Check that at least some mipmap icons are present
+        icon_files = [n for n in namelist if "mipmap" in n and ".png" in n]
+        assert len(icon_files) > 0, f"No icon files found in APK. Namelist: {namelist[:20]}"
+        # Check adaptive XML is present
+        assert any("ic_launcher.xml" in n for n in namelist), "Adaptive icon XML not found in APK"
 
 

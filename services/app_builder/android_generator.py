@@ -146,10 +146,13 @@ dependencies {{
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
-        android:theme="@style/Theme.ZirefApp">
+        android:theme="@style/Theme.ZirefApp"
+        android:hardwareAccelerated="true"
+        android:networkSecurityConfig="@xml/network_security_config">
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
             {screen_orientation_attr}>
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -418,16 +421,22 @@ public class MainActivity extends Activity {{
         # 6. Resources: Values & Adaptive Launcher Drawables
         values_dir = os.path.join(res_dir, "values")
         drawable_dir = os.path.join(res_dir, "drawable")
+        xml_dir = os.path.join(res_dir, "xml")
         mipmap_v26_dir = os.path.join(res_dir, "mipmap-anydpi-v26")
         os.makedirs(values_dir, exist_ok=True)
         os.makedirs(drawable_dir, exist_ok=True)
+        os.makedirs(xml_dir, exist_ok=True)
         os.makedirs(mipmap_v26_dir, exist_ok=True)
 
         with open(os.path.join(values_dir, "strings.xml"), "w", encoding="utf-8") as f:
             f.write(f"<resources><string name='app_name'>{app_name}</string></resources>")
 
         # Generate mipmap launcher icons from user uploaded logo & detect background color
-        detected_bg_color = self._generate_app_icons(res_dir, app_name, icon_base64)
+        try:
+            detected_bg_color = self._generate_app_icons(res_dir, app_name, icon_base64)
+        except Exception as e:
+            logger.error(f"Icon generation failed: {e}. Using default color.")
+            detected_bg_color = "#0284C7"
 
         with open(os.path.join(values_dir, "colors.xml"), "w", encoding="utf-8") as f:
             f.write(f"""<?xml version="1.0" encoding="utf-8"?>
@@ -455,7 +464,21 @@ public class MainActivity extends Activity {{
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ic_launcher_background" />
     <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_foreground" />
 </adaptive-icon>
+""")
+
+        # Network security config to allow cleartext traffic (for development/local URLs)
+        with open(os.path.join(xml_dir, "network_security_config.xml"), "w", encoding="utf-8") as f:
+            f.write("""<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
 """)
 
         # 7. manifest.json
@@ -558,38 +581,45 @@ public class MainActivity extends Activity {{
             target_dir = os.path.join(res_dir, folder_name)
             os.makedirs(target_dir, exist_ok=True)
 
-            # 1. Standard square/exact icon (pure user logo)
-            resized = source_img.resize((w, h), Image.Resampling.LANCZOS)
-            standard_path = os.path.join(target_dir, "ic_launcher.png")
-            resized.save(standard_path, format="PNG")
+            try:
+                # 1. Standard square/exact icon (pure user logo)
+                resized = source_img.resize((w, h), Image.Resampling.LANCZOS)
+                standard_path = os.path.join(target_dir, "ic_launcher.png")
+                resized.save(standard_path, format="PNG")
+                logger.debug(f"Generated standard icon: {standard_path}")
 
-            # 2. Round icon (smooth circular mask)
-            mask = Image.new("L", (w, h), 0)
-            mask_draw = ImageDraw.Draw(mask)
-            mask_draw.ellipse((0, 0, w - 1, h - 1), fill=255)
-            round_img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            round_img.paste(resized, (0, 0), mask=mask)
-            round_path = os.path.join(target_dir, "ic_launcher_round.png")
-            round_img.save(round_path, format="PNG")
+                # 2. Round icon (smooth circular mask)
+                mask = Image.new("L", (w, h), 0)
+                mask_draw = ImageDraw.Draw(mask)
+                mask_draw.ellipse((0, 0, w - 1, h - 1), fill=255)
+                round_img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+                round_img.paste(resized, (0, 0), mask=mask)
+                round_path = os.path.join(target_dir, "ic_launcher_round.png")
+                round_img.save(round_path, format="PNG")
+                logger.debug(f"Generated round icon: {round_path}")
 
-            # 3. Adaptive icon foreground (centered within 72dp safe zone)
-            fg_canvas = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
-            scale_ratio = 0.70 if has_trans else 0.74
-            target_max = int(min(fw, fh) * scale_ratio)
-            src_w, src_h = source_img.size
-            if src_w > src_h:
-                fit_w = target_max
-                fit_h = max(1, int(src_h * target_max / src_w))
-            else:
-                fit_h = target_max
-                fit_w = max(1, int(src_w * target_max / src_h))
+                # 3. Adaptive icon foreground (centered within 72dp safe zone)
+                fg_canvas = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+                scale_ratio = 0.70 if has_trans else 0.74
+                target_max = int(min(fw, fh) * scale_ratio)
+                src_w, src_h = source_img.size
+                if src_w > src_h:
+                    fit_w = target_max
+                    fit_h = max(1, int(src_h * target_max / src_w))
+                else:
+                    fit_h = target_max
+                    fit_w = max(1, int(src_w * target_max / src_h))
 
-            fg_resized = source_img.resize((fit_w, fit_h), Image.Resampling.LANCZOS)
-            offset_x = (fw - fit_w) // 2
-            offset_y = (fh - fit_h) // 2
-            fg_canvas.paste(fg_resized, (offset_x, offset_y), mask=fg_resized if fg_resized.mode == "RGBA" else None)
-            fg_path = os.path.join(target_dir, "ic_launcher_foreground.png")
-            fg_canvas.save(fg_path, format="PNG")
+                fg_resized = source_img.resize((fit_w, fit_h), Image.Resampling.LANCZOS)
+                offset_x = (fw - fit_w) // 2
+                offset_y = (fh - fit_h) // 2
+                fg_canvas.paste(fg_resized, (offset_x, offset_y), mask=fg_resized if fg_resized.mode == "RGBA" else None)
+                fg_path = os.path.join(target_dir, "ic_launcher_foreground.png")
+                fg_canvas.save(fg_path, format="PNG")
+                logger.debug(f"Generated adaptive foreground: {fg_path}")
+            except Exception as e:
+                logger.error(f"Failed to generate icons for density {folder_name}: {e}")
+                raise
 
         logger.info(f"Generated Android launcher mipmaps for: '{app_name}' (custom logo: {icon_base64 is not None}, bg: {detected_bg_color})")
         return detected_bg_color
