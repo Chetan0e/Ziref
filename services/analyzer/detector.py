@@ -172,8 +172,24 @@ class ProjectDetector:
         if "next" in deps or has_next_config:
             framework = "nextjs"
             version = deps.get("next")
-            output_dir = ".next"
-            runtime = "node"  # Next.js can be static export or node runtime
+            # Check if it's configured for static export
+            has_static_export = False
+            if has_next_config:
+                try:
+                    config_file = glob.glob(os.path.join(root_dir, "next.config.*"))[0]
+                    with open(config_file, "r", encoding="utf-8") as f:
+                        config_content = f.read()
+                        if "output: 'export'" in config_content or "output: 'standalone'" in config_content:
+                            has_static_export = True
+                except Exception:
+                    pass
+            
+            if not has_static_export:
+                warnings.append("Next.js detected but not configured for static export. Add 'output: \"export\"' to next.config.js for static deployment.")
+            
+            # Default to static export mode for deployment
+            output_dir = "out"
+            runtime = "static"
             if "build" in scripts:
                 build_command = f"{pm} run build"
             start_command = f"{pm} start"

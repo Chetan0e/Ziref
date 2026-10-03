@@ -20,6 +20,7 @@ class DeployerService:
         build_id = job_data["build_id"]
         project_id = job_data["project_id"]
         artifact_path = job_data["artifact_path"]
+        runtime = job_data.get("runtime", "static")
 
         db = get_database()
 
@@ -52,7 +53,7 @@ class DeployerService:
             "status": DeploymentStatus.DEPLOYING.value,
             "subdomain": slug,
             "url": canonical_url,
-            "runtime": "static",
+            "runtime": runtime,
             "artifact_path": artifact_path,
             "created_at": utc_now_iso(),
             "completed_at": None
@@ -100,7 +101,7 @@ class DeployerService:
                 logger.warning(f"Could not mirror deployment to slug directory {slug}: {e}")
 
             # Update routing cache in Redis
-            await set_project_routing(slug, deployment_id, "static")
+            await set_project_routing(slug, deployment_id, runtime)
 
             # Mark deployment as READY
             now_str = utc_now_iso()
@@ -189,7 +190,7 @@ class DeployerService:
         now_str = utc_now_iso()
 
         # Update Redis routing cache
-        await set_project_routing(slug, target_deployment_id, "static")
+        await set_project_routing(slug, target_deployment_id, deployment.get("runtime", "static"))
 
         # Update project active deployment
         await db.projects.update_one(

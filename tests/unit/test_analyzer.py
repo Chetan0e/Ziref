@@ -50,8 +50,9 @@ def test_detect_nextjs(detector):
         result = detector.analyze(temp_dir)
         assert result.framework == "nextjs"
         assert result.buildCommand == "npm run build"
-        assert result.outputDirectory == ".next"
-        assert result.runtime == "node"
+        assert result.outputDirectory == "out"  # Changed to 'out' for static export
+        assert result.runtime == "static"  # Changed to static for deployment compatibility
+        assert len(result.warnings) > 0  # Should warn about missing static export config
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 

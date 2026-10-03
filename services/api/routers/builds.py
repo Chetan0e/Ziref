@@ -76,6 +76,7 @@ async def trigger_build(
         "project_id": project_id,
         "upload_id": payload.upload_id,
         "package_manager": project.get("package_manager"),
+        "runtime": project.get("runtime", "static"),
         "build_command": build_command,
         "output_directory": output_directory
     })
@@ -249,6 +250,7 @@ async def retry_build(build_id: str, token_data: Dict[str, Any] = Depends(get_cu
         "project_id": b["project_id"],
         "upload_id": b["upload_id"],
         "package_manager": b.get("package_manager"),
+        "runtime": project.get("runtime", "static"),
         "build_command": b.get("build_command"),
         "output_directory": b.get("output_directory")
     })

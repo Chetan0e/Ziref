@@ -198,7 +198,8 @@ class BuildPipelineExecutor:
             await push_job("deploy", {
                 "build_id": build_id,
                 "project_id": project_id,
-                "artifact_path": artifact_rel_path
+                "artifact_path": artifact_rel_path,
+                "runtime": job_data.get("runtime", "static")
             })
 
         except Exception as e:

@@ -121,8 +121,8 @@ class DockerSandbox:
         if os.path.exists(os.path.join(root_dir, "index.html")):
             return root_dir
 
-        # 3. Check standard build output directories
-        for candidate in ["dist", "build", "out", "public", ".next"]:
+        # 3. Check standard build output directories (prioritize 'out' for Next.js static exports)
+        for candidate in ["out", "dist", "build", "public", ".next"]:
             target = os.path.join(root_dir, candidate)
             if os.path.exists(target) and os.path.isdir(target):
                 # Check for Angular browser subfolder (e.g. dist/project/browser)

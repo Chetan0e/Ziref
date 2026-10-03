@@ -73,7 +73,9 @@ async def upload_project_archive(
                 "framework": analysis.framework,
                 "language": analysis.language,
                 "package_manager": analysis.packageManager,
+                "runtime": analysis.runtime,
                 "build_command": analysis.buildCommand,
+                "start_command": analysis.startCommand,
                 "output_directory": analysis.outputDirectory,
                 "status": ProjectStatus.ANALYZED.value,
                 "updated_at": now_str
