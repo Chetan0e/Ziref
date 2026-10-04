@@ -82,11 +82,15 @@ module.exports = {
         "prose-wide": "640px",
       },
 
+      spacing: {
+        "layout": "1280px",
+      },
+
       boxShadow: {
         "xs":   "var(--shadow-xs)",
         "card": "var(--shadow-sm)",
         "panel":"var(--shadow-md)",
-        "float":"var(--shadow-lg)",
+        "float":"var(--shadow-float)",
       },
 
       borderRadius: {

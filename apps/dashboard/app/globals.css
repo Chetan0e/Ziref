@@ -8,12 +8,14 @@
   --background:       #FAFAF9;
   --surface:          #FFFFFF;
   --surface-muted:    #F4F4F2;
+  --surface-hover:    #F9FAFB;
   --surface-raised:   #FFFFFF;
 
   /* Text */
   --text-primary:     #0C0C0D;
   --text-secondary:   #4B5563;
   --text-tertiary:    #9CA3AF;
+  --text-muted:       #9CA3AF;
   --text-inverse:     #FFFFFF;
 
   /* Border */
@@ -58,17 +60,20 @@
   --shadow-sm:  0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
   --shadow-md:  0 4px 12px rgba(0,0,0,0.06), 0 2px 4px rgba(0,0,0,0.04);
   --shadow-lg:  0 12px 32px rgba(0,0,0,0.08), 0 4px 8px rgba(0,0,0,0.04);
+  --shadow-float: 0 20px 60px rgba(0,0,0,0.15), 0 8px 16px rgba(0,0,0,0.1);
 }
 
 .dark {
   --background:       #09090B;
   --surface:          #111113;
   --surface-muted:    #18181A;
+  --surface-hover:    #1C1C1F;
   --surface-raised:   #1C1C1F;
 
   --text-primary:     #F4F4F5;
   --text-secondary:   #A1A1AA;
   --text-tertiary:    #71717A;
+  --text-muted:       #71717A;
   --text-inverse:     #09090B;
 
   --border:           #27272A;
