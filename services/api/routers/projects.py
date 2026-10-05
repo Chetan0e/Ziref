@@ -145,8 +145,8 @@ async def import_git_project(payload: GitImportRequest, token_data: Dict[str, An
             slug = f"{base_slug}-{counter}"
             counter += 1
 
-        build_cmd = analysis.buildCommand or "npm run build"
-        out_dir = analysis.outputDirectory or "dist"
+        build_cmd = analysis.buildCommand
+        out_dir = analysis.outputDirectory or "."
 
         proj_doc = {
             "user_id": token_data["sub"],
@@ -258,8 +258,8 @@ async def redeploy_project(id_or_slug: str, token_data: Dict[str, Any] = Depends
 
     now_str = utc_now_iso()
     upload_id = str(latest_upload["_id"])
-    build_cmd = project.get("build_command") or "npm run build"
-    out_dir = project.get("output_directory") or "dist"
+    build_cmd = project.get("build_command")
+    out_dir = project.get("output_directory") or "."
 
     build_doc = {
         "project_id": project_id,

@@ -72,6 +72,10 @@ class DockerSandbox:
         has_requirements = os.path.exists(os.path.join(root_dir, "requirements.txt")) or os.path.exists(os.path.join(root_dir, "pyproject.toml"))
         has_index_html = os.path.exists(os.path.join(root_dir, "index.html")) or bool(glob.glob(os.path.join(root_dir, "**", "index.html"), recursive=True))
 
+        # Ignore legacy fallback 'npm run build' if no package.json exists in workspace
+        if not has_package_json and clean_build_cmd == "npm run build":
+            clean_build_cmd = ""
+
         # -------------------------------------------------------------
         # 1. Zero-build Static Application (HTML, JS, CSS, Static Assets)
         # -------------------------------------------------------------

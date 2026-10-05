@@ -66,5 +66,32 @@ def test_detect_static_html(detector):
         assert result.framework == "html"
         assert result.runtime == "static"
         assert result.outputDirectory == "."
+        assert result.buildCommand is None
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+@pytest.mark.asyncio
+async def test_sandbox_static_html_ignores_erroneous_build_command():
+    from services.builder.docker_sandbox import docker_sandbox
+    temp_dir = tempfile.mkdtemp()
+    try:
+        with open(os.path.join(temp_dir, "index.html"), "w") as f:
+            f.write("<!DOCTYPE html><html><body>Hello World</body></html>")
+
+        logs = []
+        async def dummy_callback(evt):
+            logs.append(evt.message)
+
+        out = await docker_sandbox.execute_build(
+            workspace_dir=temp_dir,
+            package_manager="none",
+            build_command="npm run build",  # Erroneous legacy command
+            output_directory=".",
+            env_vars={},
+            log_callback=dummy_callback
+        )
+        assert os.path.exists(out)
+        assert any("Static application detected" in log for log in logs)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
