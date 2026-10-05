@@ -78,18 +78,20 @@ class DeployerService:
                 except TypeError:
                     tar.extractall(path=target_deploy_dir)
 
-            # If target_deploy_dir has only 1 directory and no index.html at root, unwrap it
+            # If target_deploy_dir does not have index.html at root, locate index.html and unwrap its containing directory
             if not os.path.exists(os.path.join(target_deploy_dir, "index.html")):
-                entries = [e for e in os.listdir(target_deploy_dir) if not e.startswith(".")]
-                if len(entries) == 1:
-                    single_sub = os.path.join(target_deploy_dir, entries[0])
-                    if os.path.isdir(single_sub):
-                        for item in os.listdir(single_sub):
-                            src = os.path.join(single_sub, item)
+                html_files = glob.glob(os.path.join(target_deploy_dir, "**", "index.html"), recursive=True)
+                if html_files:
+                    html_files.sort(key=lambda p: len(os.path.relpath(p, target_deploy_dir).split(os.sep)))
+                    containing_dir = os.path.dirname(html_files[0])
+                    if containing_dir != target_deploy_dir:
+                        logger.info(f"Unwrapping static website assets from {containing_dir} into deployment root {target_deploy_dir}")
+                        for item in os.listdir(containing_dir):
+                            src = os.path.join(containing_dir, item)
                             dst = os.path.join(target_deploy_dir, item)
                             if not os.path.exists(dst):
                                 shutil.move(src, dst)
-                        shutil.rmtree(single_sub, ignore_errors=True)
+                        shutil.rmtree(containing_dir, ignore_errors=True)
 
             # Mirror deployment to slug directory for direct filesystem routing resiliency
             slug_deploy_dir = os.path.join(settings.STORAGE_PATH, "deployments", slug)

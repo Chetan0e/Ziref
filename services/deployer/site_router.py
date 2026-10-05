@@ -42,6 +42,41 @@ async def _resolve_custom_domain(host: str) -> Optional[str]:
         logger.warning(f"Custom domain lookup error for {host}: {e}")
     return None
 
+KNOWN_MIME_TYPES = {
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".cjs": "text/javascript",
+    ".ts": "text/javascript",
+    ".css": "text/css",
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".json": "application/json",
+    ".map": "application/json",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".ico": "image/x-icon",
+    ".wasm": "application/wasm",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+    ".otf": "font/otf",
+    ".xml": "application/xml",
+    ".txt": "text/plain",
+}
+
+def resolve_media_type(filename: str) -> str:
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in KNOWN_MIME_TYPES:
+        return KNOWN_MIME_TYPES[ext]
+    guessed, _ = mimetypes.guess_type(filename)
+    if guessed and guessed != "application/octet-stream":
+        return guessed
+    return "text/plain" if ext in [".txt", ".log", ".md"] else "application/octet-stream"
+
 async def _extract_slug_from_request(request: Request) -> Tuple[Optional[str], str]:
     """
     Extracts project slug either from Host header (subdomain/custom domain) or URL path prefix.
@@ -56,6 +91,15 @@ async def _extract_slug_from_request(request: Request) -> Tuple[Optional[str], s
         if len(parts) >= 2:
             slug = parts[1]
             subpath = "/".join(parts[2:])
+            # Strip any repeated 'sites/<slug>/' or '<slug>/' prefixes from subpath
+            pattern1 = f"sites/{slug}/"
+            pattern2 = f"{slug}/"
+            while subpath.startswith(pattern1):
+                subpath = subpath[len(pattern1):]
+            while subpath.startswith("sites/"):
+                subpath = subpath[6:]
+            while subpath.startswith(pattern2):
+                subpath = subpath[len(pattern2):]
             return slug, subpath
 
     # 2. Host-based subdomain routing: {slug}.localhost or {slug}.localtest.me
@@ -184,6 +228,8 @@ async def route_site(request: Request, full_path: str = ""):
 
     deploy_root = os.path.abspath(os.path.join(settings.STORAGE_PATH, "deployments", deployment_id))
     if not os.path.exists(deploy_root):
+        deploy_root = os.path.abspath(os.path.join(settings.STORAGE_PATH, "deployments", slug))
+    if not os.path.exists(deploy_root):
         res = HTMLResponse(
             status_code=500,
             content="<h1>Deployment Artifact Missing on Disk</h1>"
@@ -200,11 +246,16 @@ async def route_site(request: Request, full_path: str = ""):
 
     # 1. Direct file match
     if os.path.isfile(target_file):
-        mime_type, _ = mimetypes.guess_type(target_file)
-        res = FileResponse(target_file, media_type=mime_type or "application/octet-stream")
+        res = FileResponse(target_file, media_type=resolve_media_type(target_file))
+
+    # 1b. Check if asset exists inside a subfolder in deploy_root
+    elif clean_subpath:
+        sub_matches = glob.glob(os.path.join(deploy_root, "**", os.path.basename(clean_subpath)), recursive=True)
+        if sub_matches and os.path.isfile(sub_matches[0]):
+            res = FileResponse(sub_matches[0], media_type=resolve_media_type(sub_matches[0]))
 
     # 2. Directory match -> look for index.html
-    elif os.path.isdir(target_file):
+    if res is None and os.path.isdir(target_file):
         index_file = os.path.join(target_file, "index.html")
         if os.path.isfile(index_file):
             res = FileResponse(index_file, media_type="text/html")
@@ -223,10 +274,18 @@ async def route_site(request: Request, full_path: str = ""):
                 res = FileResponse(nested_html[0], media_type="text/html")
 
     if res is None:
-        res = HTMLResponse(
-            status_code=404,
-            content=f"<h1>404 Not Found</h1><p>Asset '{subpath}' not found in deployment {deployment_id}.</p>"
-        )
+        ext = os.path.splitext(clean_subpath)[1].lower()
+        if ext in [".js", ".mjs", ".css", ".json", ".svg", ".wasm"]:
+            res = Response(
+                status_code=404,
+                content=f"/* 404: Asset '{subpath}' not found */" if ext in [".js", ".css"] else "{}",
+                media_type=resolve_media_type(clean_subpath)
+            )
+        else:
+            res = HTMLResponse(
+                status_code=404,
+                content=f"<h1>404 Not Found</h1><p>Asset '{subpath}' not found in deployment {deployment_id}.</p>"
+            )
 
     # Apply security and cache headers
     _apply_security_and_cache_headers(res, clean_subpath)
