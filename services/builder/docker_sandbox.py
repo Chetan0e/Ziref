@@ -68,12 +68,12 @@ class DockerSandbox:
         clean_out_dir = (output_directory or "").strip() or "."
         pm = (package_manager or "none").lower()
 
-        has_package_json = os.path.exists(os.path.join(root_dir, "package.json"))
+        has_package_json = os.path.exists(os.path.join(root_dir, "package.json")) or bool(glob.glob(os.path.join(root_dir, "**", "package.json"), recursive=True))
         has_requirements = os.path.exists(os.path.join(root_dir, "requirements.txt")) or os.path.exists(os.path.join(root_dir, "pyproject.toml"))
         has_index_html = os.path.exists(os.path.join(root_dir, "index.html")) or bool(glob.glob(os.path.join(root_dir, "**", "index.html"), recursive=True))
 
-        # Ignore legacy fallback 'npm run build' if no package.json exists in workspace
-        if not has_package_json and clean_build_cmd == "npm run build":
+        # Ignore Node build commands if no package.json exists in workspace
+        if not has_package_json and (clean_build_cmd.startswith("npm ") or clean_build_cmd.startswith("yarn ") or clean_build_cmd.startswith("pnpm ") or clean_build_cmd.startswith("bun ") or clean_build_cmd == "npm run build"):
             clean_build_cmd = ""
 
         # -------------------------------------------------------------

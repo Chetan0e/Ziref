@@ -107,13 +107,29 @@ class BuildPipelineExecutor:
             ))
 
             analysis = project_detector.analyze(workspace_dir)
-            package_manager = job_data.get("package_manager") or analysis.packageManager or "none"
-            build_command = job_data.get("build_command")
-            if build_command is None:
-                build_command = analysis.buildCommand
-            output_directory = job_data.get("output_directory")
-            if output_directory is None:
+            package_manager = analysis.packageManager or job_data.get("package_manager") or "none"
+
+            # For static HTML/CSS/JS projects (no build script), override any legacy/erroneous 'npm run build'
+            if analysis.framework in ["html", "static"] and analysis.buildCommand is None:
+                build_command = None
                 output_directory = analysis.outputDirectory or "."
+                # Update database record so future redeploys inherit corrected settings
+                await db.projects.update_one(
+                    {"_id": ObjectId(project_id)},
+                    {"$set": {
+                        "framework": analysis.framework,
+                        "package_manager": package_manager,
+                        "build_command": None,
+                        "output_directory": output_directory
+                    }}
+                )
+            else:
+                build_command = job_data.get("build_command")
+                if build_command is None:
+                    build_command = analysis.buildCommand
+                output_directory = job_data.get("output_directory")
+                if output_directory is None:
+                    output_directory = analysis.outputDirectory or "."
 
             await emit_log(BuildLogEvent(
                 stage=BuildStage.ANALYSIS.value,
