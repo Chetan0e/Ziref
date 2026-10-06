@@ -192,14 +192,18 @@ def _apply_security_and_cache_headers(res: Response, clean_subpath: str) -> Resp
 @app.api_route("/{full_path:path}", methods=["GET", "HEAD", "OPTIONS"])
 async def route_site(request: Request, full_path: str = ""):
     # Ensure directory requests end with a trailing slash so relative links/assets resolve correctly
+    # Only redirect bare slug roots (no file extension) to avoid redirect loops for assets (sw.js, etc.)
     path = request.url.path
     if path.startswith("/sites/"):
         parts = path.strip("/").split("/")
-        if len(parts) == 2 and not path.endswith("/"):
-            target = path + "/"
-            if request.url.query:
-                target += f"?{request.url.query}"
-            return RedirectResponse(url=target, status_code=302)
+        if len(parts) == 2:
+            leaf = parts[-1]
+            has_ext = "." in leaf and not leaf.startswith(".")
+            if not has_ext and not path.endswith("/"):
+                target = path + "/"
+                if request.url.query:
+                    target += f"?{request.url.query}"
+                return RedirectResponse(url=target, status_code=302)
 
     slug, subpath = await _extract_slug_from_request(request)
 

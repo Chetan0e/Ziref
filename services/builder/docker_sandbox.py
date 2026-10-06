@@ -58,7 +58,7 @@ class DockerSandbox:
     ) -> str:
         """
         Executes dependency installation and build inside a secure isolated sandbox.
-        Handles Static HTML, React/Vite/Next, Python, and generic projects without errors.
+        Handles Static HTML, React/Vite/Next, MERN mono-repos, Python, and generic projects.
         Returns the absolute path to the directory containing deployable files.
         """
         abs_workspace = os.path.abspath(workspace_dir)
@@ -68,12 +68,33 @@ class DockerSandbox:
         clean_out_dir = (output_directory or "").strip() or "."
         pm = (package_manager or "none").lower()
 
-        has_package_json = os.path.exists(os.path.join(root_dir, "package.json")) or bool(glob.glob(os.path.join(root_dir, "**", "package.json"), recursive=True))
+        # ---------------------------------------------------------------
+        # For MERN / mono-repos the detector sets outputDirectory to
+        # "client/dist", "frontend/build", etc.  We derive the correct
+        # build-root (the subfolder containing package.json) from that.
+        # ---------------------------------------------------------------
+        build_root = root_dir  # default: build from workspace root
+        if "/" in clean_out_dir or "\\" in clean_out_dir:
+            sub_candidate = clean_out_dir.split("/")[0].split("\\")[0]
+            sub_path = os.path.join(root_dir, sub_candidate)
+            if os.path.isdir(sub_path) and os.path.exists(os.path.join(sub_path, "package.json")):
+                build_root = sub_path
+
+        has_package_json = (
+            os.path.exists(os.path.join(build_root, "package.json"))
+            or bool(glob.glob(os.path.join(root_dir, "**", "package.json"), recursive=True))
+        )
         has_requirements = os.path.exists(os.path.join(root_dir, "requirements.txt")) or os.path.exists(os.path.join(root_dir, "pyproject.toml"))
         has_index_html = os.path.exists(os.path.join(root_dir, "index.html")) or bool(glob.glob(os.path.join(root_dir, "**", "index.html"), recursive=True))
 
-        # Ignore Node build commands if no package.json exists in workspace
-        if not has_package_json and (clean_build_cmd.startswith("npm ") or clean_build_cmd.startswith("yarn ") or clean_build_cmd.startswith("pnpm ") or clean_build_cmd.startswith("bun ") or clean_build_cmd == "npm run build"):
+        # Ignore Node build commands if no package.json exists anywhere in workspace
+        if not has_package_json and (
+            clean_build_cmd.startswith("npm ")
+            or clean_build_cmd.startswith("yarn ")
+            or clean_build_cmd.startswith("pnpm ")
+            or clean_build_cmd.startswith("bun ")
+            or clean_build_cmd == "npm run build"
+        ):
             clean_build_cmd = ""
 
         # -------------------------------------------------------------
@@ -106,11 +127,11 @@ class DockerSandbox:
         # Decide whether to use Docker or Subprocess execution
         if self.client:
             return await self._execute_docker(
-                root_dir, pm, clean_build_cmd, clean_out_dir, has_package_json, has_requirements, env_vars, log_callback
+                build_root, pm, clean_build_cmd, clean_out_dir, has_package_json, has_requirements, env_vars, log_callback, root_dir
             )
         else:
             return await self._execute_subprocess(
-                root_dir, pm, clean_build_cmd, clean_out_dir, has_package_json, has_requirements, env_vars, log_callback
+                build_root, pm, clean_build_cmd, clean_out_dir, has_package_json, has_requirements, env_vars, log_callback, root_dir
             )
 
     def _resolve_output_directory(self, root_dir: str, configured_output_dir: str) -> str:
@@ -156,7 +177,8 @@ class DockerSandbox:
         has_package_json: bool,
         has_requirements: bool,
         env_vars: Dict[str, str],
-        log_callback: Callable[[BuildLogEvent], Any]
+        log_callback: Callable[[BuildLogEvent], Any],
+        artifact_root: Optional[str] = None,
     ) -> str:
         container = None
         try:
@@ -238,7 +260,8 @@ class DockerSandbox:
                 except Exception:
                     pass
 
-        return self._resolve_output_directory(workspace_dir, output_directory)
+        real_root = artifact_root or workspace_dir
+        return self._resolve_output_directory(real_root, output_directory)
 
     async def _execute_subprocess(
         self,
@@ -249,7 +272,8 @@ class DockerSandbox:
         has_package_json: bool,
         has_requirements: bool,
         env_vars: Dict[str, str],
-        log_callback: Callable[[BuildLogEvent], Any]
+        log_callback: Callable[[BuildLogEvent], Any],
+        artifact_root: Optional[str] = None,
     ) -> str:
         """Fallback local subprocess runner when Docker daemon is not active."""
         env = {
@@ -366,6 +390,7 @@ class DockerSandbox:
                     exit_code=proc.returncode
                 )
 
-        return self._resolve_output_directory(workspace_dir, output_directory)
+        real_root = artifact_root or workspace_dir
+        return self._resolve_output_directory(real_root, output_directory)
 
 docker_sandbox = DockerSandbox()
