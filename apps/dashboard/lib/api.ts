@@ -11,6 +11,7 @@ import {
 } from '@ziref/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const DEPLOY_BASE = process.env.NEXT_PUBLIC_DEPLOY_DOMAIN || 'http://localhost:8080';
 
 export class ApiError extends Error {
   status: number;
@@ -427,7 +428,7 @@ class ApiClient {
   }
 
   getPreviewUrl(slug: string): string {
-    return `${API_BASE}/sites/${slug}/`;
+    return `${DEPLOY_BASE}/sites/${slug}/`;
   }
 
   getMobileApkDownloadUrl(buildId: string): string {

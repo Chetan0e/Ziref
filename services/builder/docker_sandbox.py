@@ -187,8 +187,8 @@ class DockerSandbox:
             # Install dependencies only if manifest exists
             if has_package_json and package_manager != "none":
                 install_cmd = {
-                    "pnpm": "pnpm install",
-                    "yarn": "yarn install",
+                    "pnpm": "pnpm install --frozen-lockfile",
+                    "yarn": "yarn install --frozen-lockfile",
                     "bun": "bun install",
                     "npm": "npm install"
                 }.get(package_manager, "npm install")
@@ -197,11 +197,7 @@ class DockerSandbox:
                 script_lines.append(install_cmd)
             elif has_requirements:
                 script_lines.append('echo "==> Installing Python dependencies..."')
-                script_lines.append("pip install -r requirements.txt")
-
-            if build_command:
-                script_lines.append(f'echo "==> Running build command: {build_command}"')
-                script_lines.append(build_command)
+                script_lines.append("pip install --no-cache-dir -r requirements.txt")
 
             combined_script = "\n".join(script_lines)
 
@@ -286,8 +282,8 @@ class DockerSandbox:
         # 1. Install dependencies only if project manifest is present
         if has_package_json and package_manager != "none":
             install_cmd = {
-                "pnpm": "pnpm install",
-                "yarn": "yarn install",
+                "pnpm": "pnpm install --frozen-lockfile",
+                "yarn": "yarn install --frozen-lockfile",
                 "bun": "bun install",
                 "npm": "npm install"
             }.get(package_manager, "npm install")
@@ -333,7 +329,7 @@ class DockerSandbox:
                     level=LogLevel.INFO,
                     message="Installing Python dependencies via pip..."
                 ))
-                pip_cmd = f"pip install -r requirements.txt"
+                pip_cmd = "pip install --no-cache-dir -r requirements.txt"
                 proc = await asyncio.create_subprocess_shell(
                     pip_cmd,
                     cwd=workspace_dir,
@@ -353,6 +349,12 @@ class DockerSandbox:
                             message=msg
                         ))
                 await proc.wait()
+                if proc.returncode != 0:
+                    raise SandboxExecutionError(
+                        f"Python dependency installation failed with code {proc.returncode}",
+                        stage=BuildStage.DEPENDENCIES.value,
+                        exit_code=proc.returncode
+                    )
 
         # 2. Run build command if configured
         if build_command:
