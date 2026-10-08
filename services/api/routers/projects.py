@@ -228,10 +228,17 @@ async def import_git_project(payload: GitImportRequest, token_data: Dict[str, An
 
     finally:
         # Cleanup temporary files
-        if os.path.exists(workspace_dir):
-            shutil.rmtree(workspace_dir, ignore_errors=True)
-        if os.path.exists(zip_path):
-            os.remove(zip_path)
+        if 'workspace_dir' in locals() and os.path.exists(workspace_dir):
+            parent = os.path.dirname(workspace_dir)
+            if "ziref_git_" in os.path.basename(parent):
+                shutil.rmtree(parent, ignore_errors=True)
+            else:
+                shutil.rmtree(workspace_dir, ignore_errors=True)
+        if 'zip_path' in locals() and os.path.exists(zip_path):
+            try:
+                os.remove(zip_path)
+            except Exception:
+                pass
 
 async def _resolve_user_project(db, id_or_slug: str, user_id: str) -> Dict[str, Any]:
     query: Dict[str, Any] = {"user_id": user_id}

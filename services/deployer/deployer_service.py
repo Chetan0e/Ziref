@@ -1,6 +1,7 @@
 import os
 import tarfile
 import shutil
+import glob
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
@@ -89,8 +90,15 @@ class DeployerService:
                         for item in os.listdir(containing_dir):
                             src = os.path.join(containing_dir, item)
                             dst = os.path.join(target_deploy_dir, item)
-                            if not os.path.exists(dst):
-                                shutil.move(src, dst)
+                            if os.path.exists(dst):
+                                if os.path.isdir(dst):
+                                    shutil.rmtree(dst, ignore_errors=True)
+                                else:
+                                    try:
+                                        os.remove(dst)
+                                    except Exception:
+                                        pass
+                            shutil.move(src, dst)
                         shutil.rmtree(containing_dir, ignore_errors=True)
 
             # Mirror deployment to slug directory for direct filesystem routing resiliency

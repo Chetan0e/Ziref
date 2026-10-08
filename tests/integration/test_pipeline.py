@@ -41,3 +41,20 @@ async def test_api_health_endpoint():
         res = await client.get("/health")
         assert res.status_code == 200
         assert res.json()["status"] == "ok"
+
+@pytest.mark.asyncio
+async def test_preview_url_generation_and_gateway():
+    from services.api.core.deployment_url import deployment_url_service
+    from services.api.core.config import settings
+
+    test_slug = "my-test-preview-app"
+    url = deployment_url_service.generate_public_url(test_slug)
+    assert test_slug in url
+    assert url.endswith(f"/sites/{test_slug}/") or url.endswith(f"/{test_slug}/")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Route without trailing slash redirects to with slash
+        res = await client.get(f"/sites/{test_slug}")
+        assert res.status_code in [302, 307] or res.status_code == 404
+

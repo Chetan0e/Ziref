@@ -550,6 +550,18 @@ class ApiClient {
   async getDashboardMetrics(): Promise<DashboardMetrics> {
     return this.request<DashboardMetrics>('/api/v1/dashboard/metrics');
   }
+
+  // ==========================================
+  // Deployment & Preview URL Helper
+  // ==========================================
+  getPreviewUrl(slug: string): string {
+    const apiBase = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
+    const deployBase = (process.env.NEXT_PUBLIC_DEPLOY_DOMAIN || '').replace(/\/+$/, '');
+    if (deployBase && !deployBase.includes('localhost')) {
+      return `${deployBase}/sites/${slug}/`;
+    }
+    return `${apiBase}/sites/${slug}/`;
+  }
 }
 
 export { type DashboardMetrics };

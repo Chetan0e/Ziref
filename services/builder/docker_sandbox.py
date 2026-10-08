@@ -73,12 +73,19 @@ class DockerSandbox:
         # "client/dist", "frontend/build", etc.  We derive the correct
         # build-root (the subfolder containing package.json) from that.
         # ---------------------------------------------------------------
+        # Resolve build root (the directory containing package.json)
         build_root = root_dir  # default: build from workspace root
         if "/" in clean_out_dir or "\\" in clean_out_dir:
             sub_candidate = clean_out_dir.split("/")[0].split("\\")[0]
             sub_path = os.path.join(root_dir, sub_candidate)
             if os.path.isdir(sub_path) and os.path.exists(os.path.join(sub_path, "package.json")):
                 build_root = sub_path
+        elif not os.path.exists(os.path.join(build_root, "package.json")):
+            for sub in ["client", "frontend", "web", "app", "ui", "src"]:
+                candidate = os.path.join(root_dir, sub)
+                if os.path.isdir(candidate) and os.path.exists(os.path.join(candidate, "package.json")):
+                    build_root = candidate
+                    break
 
         has_package_json = (
             os.path.exists(os.path.join(build_root, "package.json"))
@@ -86,6 +93,11 @@ class DockerSandbox:
         )
         has_requirements = os.path.exists(os.path.join(root_dir, "requirements.txt")) or os.path.exists(os.path.join(root_dir, "pyproject.toml"))
         has_index_html = os.path.exists(os.path.join(root_dir, "index.html")) or bool(glob.glob(os.path.join(root_dir, "**", "index.html"), recursive=True))
+
+        # Check availability of package manager binary; fallback to npm if missing
+        if pm in ["pnpm", "yarn", "bun"] and not shutil.which(pm):
+            logger.info(f"Package manager '{pm}' not found on host. Falling back to 'npm'.")
+            pm = "npm"
 
         # Ignore Node build commands if no package.json exists anywhere in workspace
         if not has_package_json and (
@@ -136,18 +148,14 @@ class DockerSandbox:
 
     def _resolve_output_directory(self, root_dir: str, configured_output_dir: str) -> str:
         """Deterministically locates the directory with deployable artifacts."""
-        # 1. Direct configured directory
+        # 1. Direct configured directory if explicitly set and not root
         if configured_output_dir and configured_output_dir not in [".", "./"]:
             target = os.path.abspath(os.path.join(root_dir, configured_output_dir))
             if os.path.exists(target) and os.path.isdir(target):
                 return target
 
-        # 2. Check root directory
-        if os.path.exists(os.path.join(root_dir, "index.html")):
-            return root_dir
-
-        # 3. Check standard build output directories (prioritize 'out' for Next.js static exports)
-        for candidate in ["out", "dist", "build", "public", ".next"]:
+        # 2. Check standard build output directories first (prioritize compiled assets over raw sources)
+        for candidate in ["dist", "build", "out", "public", ".next", ".output/public"]:
             target = os.path.join(root_dir, candidate)
             if os.path.exists(target) and os.path.isdir(target):
                 # Check for Angular browser subfolder (e.g. dist/project/browser)
@@ -158,11 +166,18 @@ class DockerSandbox:
                 subs = [os.path.join(target, d) for d in os.listdir(target) if os.path.isdir(os.path.join(target, d))]
                 if len(subs) == 1 and os.path.exists(os.path.join(subs[0], "index.html")):
                     return subs[0]
-                return target
+                # Return directory if it contains files or index.html
+                if os.path.exists(os.path.join(target, "index.html")) or len(os.listdir(target)) > 0:
+                    return target
+
+        # 3. Check root directory for index.html (static HTML projects or in-place builds)
+        if os.path.exists(os.path.join(root_dir, "index.html")):
+            return root_dir
 
         # 4. Search for index.html anywhere in root_dir
         html_files = glob.glob(os.path.join(root_dir, "**", "index.html"), recursive=True)
         if html_files:
+            html_files.sort(key=lambda p: len(os.path.relpath(p, root_dir).split(os.sep)))
             return os.path.dirname(html_files[0])
 
         # 5. Fallback to root_dir
@@ -184,14 +199,14 @@ class DockerSandbox:
         try:
             script_lines = ["set -e"]
 
-            # Install dependencies only if manifest exists
+            # Install dependencies only if manifest exists (include devDependencies for bundlers/compilers)
             if has_package_json and package_manager != "none":
                 install_cmd = {
-                    "pnpm": "pnpm install --frozen-lockfile",
-                    "yarn": "yarn install --frozen-lockfile",
+                    "pnpm": "pnpm install || pnpm install --no-frozen-lockfile",
+                    "yarn": "yarn install",
                     "bun": "bun install",
-                    "npm": "npm install"
-                }.get(package_manager, "npm install")
+                    "npm": "npm install --include=dev"
+                }.get(package_manager, "npm install --include=dev")
 
                 script_lines.append(f'echo "==> Installing dependencies with {package_manager}..."')
                 script_lines.append(install_cmd)
@@ -199,11 +214,15 @@ class DockerSandbox:
                 script_lines.append('echo "==> Installing Python dependencies..."')
                 script_lines.append("pip install --no-cache-dir -r requirements.txt")
 
+            # Execute build command inside container
+            if build_command:
+                script_lines.append(f'echo "==> Running build command: {build_command}..."')
+                script_lines.append(f"NODE_ENV=production {build_command}")
+
             combined_script = "\n".join(script_lines)
 
             sanitized_env = {
                 "CI": "true",
-                "NODE_ENV": "production",
                 **env_vars
             }
 
@@ -271,22 +290,29 @@ class DockerSandbox:
         log_callback: Callable[[BuildLogEvent], Any],
         artifact_root: Optional[str] = None,
     ) -> str:
-        """Fallback local subprocess runner when Docker daemon is not active."""
+        """Fallback local subprocess runner with devDependencies and path isolation."""
         env = {
             **os.environ,
             "CI": "true",
-            "NODE_ENV": "production",
             **env_vars
         }
+        # Do not enforce NODE_ENV=production during dependency installation so devDependencies (vite, tsc, etc.) are installed
+        if "NODE_ENV" in env:
+            del env["NODE_ENV"]
+
+        # Ensure node_modules/.bin in workspace is in PATH
+        node_bin_dir = os.path.join(workspace_dir, "node_modules", ".bin")
+        if os.path.exists(node_bin_dir):
+            env["PATH"] = f"{node_bin_dir}{os.pathsep}{env.get('PATH', '')}"
 
         # 1. Install dependencies only if project manifest is present
         if has_package_json and package_manager != "none":
             install_cmd = {
-                "pnpm": "pnpm install --frozen-lockfile",
-                "yarn": "yarn install --frozen-lockfile",
+                "pnpm": "pnpm install",
+                "yarn": "yarn install",
                 "bun": "bun install",
-                "npm": "npm install"
-            }.get(package_manager, "npm install")
+                "npm": "npm install --include=dev"
+            }.get(package_manager, "npm install --include=dev")
 
             await log_callback(BuildLogEvent(
                 stage=BuildStage.DEPENDENCIES.value,
@@ -316,11 +342,49 @@ class DockerSandbox:
 
             await proc.wait()
             if proc.returncode != 0:
-                raise SandboxExecutionError(
-                    f"Dependency installation failed with code {proc.returncode}",
-                    stage=BuildStage.DEPENDENCIES.value,
-                    exit_code=proc.returncode
-                )
+                # If pnpm or yarn failed, attempt graceful fallback to npm install
+                if package_manager in ["pnpm", "yarn", "bun"]:
+                    await log_callback(BuildLogEvent(
+                        stage=BuildStage.DEPENDENCIES.value,
+                        level=LogLevel.WARNING,
+                        message=f"{package_manager} install exited with {proc.returncode}. Attempting npm install fallback..."
+                    ))
+                    fallback_proc = await asyncio.create_subprocess_shell(
+                        "npm install --include=dev",
+                        cwd=workspace_dir,
+                        env=env,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT
+                    )
+                    while True:
+                        line = await fallback_proc.stdout.readline()
+                        if not line:
+                            break
+                        msg = line.decode('utf-8', errors='replace').strip()
+                        if msg:
+                            await log_callback(BuildLogEvent(
+                                stage=BuildStage.DEPENDENCIES.value,
+                                level=LogLevel.INFO,
+                                message=msg
+                            ))
+                    await fallback_proc.wait()
+                    if fallback_proc.returncode != 0:
+                        raise SandboxExecutionError(
+                            f"Dependency installation failed with code {fallback_proc.returncode}",
+                            stage=BuildStage.DEPENDENCIES.value,
+                            exit_code=fallback_proc.returncode
+                        )
+                else:
+                    raise SandboxExecutionError(
+                        f"Dependency installation failed with code {proc.returncode}",
+                        stage=BuildStage.DEPENDENCIES.value,
+                        exit_code=proc.returncode
+                    )
+
+            # Re-check node_modules/.bin after installation to add to PATH
+            if os.path.exists(node_bin_dir) and node_bin_dir not in env.get("PATH", ""):
+                env["PATH"] = f"{node_bin_dir}{os.pathsep}{env.get('PATH', '')}"
+
         elif has_requirements:
             req_file = os.path.join(workspace_dir, "requirements.txt")
             if os.path.exists(req_file):
@@ -364,10 +428,15 @@ class DockerSandbox:
                 message=f"Executing build command: {build_command}..."
             ))
 
+            build_env = {
+                **env,
+                "NODE_ENV": "production"
+            }
+
             proc = await asyncio.create_subprocess_shell(
                 build_command,
                 cwd=workspace_dir,
-                env=env,
+                env=build_env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT
             )

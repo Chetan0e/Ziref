@@ -141,3 +141,71 @@ async def test_mobile_build_pipeline_completion():
         assert zipfile.is_zipfile(source_disk_path)
     finally:
         await close_database_connection()
+
+@pytest.mark.asyncio
+async def test_deployer_unwraps_nested_index_html():
+    from services.deployer.deployer_service import deployer_service
+    import tarfile
+
+    await connect_to_database()
+    try:
+        db = get_database()
+        now_str = utc_now_iso()
+
+        # 1. Create a dummy project
+        slug = f"unwrap-test-{ObjectId()}"
+        p_res = await db.projects.insert_one({
+            "name": "Unwrap Test",
+            "slug": slug,
+            "status": ProjectStatus.BUILD_QUEUED.value,
+            "created_at": now_str,
+            "updated_at": now_str
+        })
+        project_id = str(p_res.inserted_id)
+
+        # 2. Create artifact tarball with nested dist/index.html
+        build_id = str(ObjectId())
+        artifact_rel = os.path.join("artifacts", f"test-artifact-{build_id}.tar.gz")
+        artifact_abs = os.path.join(settings.STORAGE_PATH, artifact_rel)
+        os.makedirs(os.path.dirname(artifact_abs), exist_ok=True)
+
+        tmp_build = tempfile.mkdtemp()
+        try:
+            nested_dist = os.path.join(tmp_build, "dist")
+            os.makedirs(nested_dist, exist_ok=True)
+            with open(os.path.join(nested_dist, "index.html"), "w", encoding="utf-8") as f:
+                f.write("<!DOCTYPE html><html><body><h1>Unwrapped Dist Site</h1></body></html>")
+            with open(os.path.join(nested_dist, "app.js"), "w", encoding="utf-8") as f:
+                f.write("console.log('unwrapped');")
+
+            with tarfile.open(artifact_abs, "w:gz") as tar:
+                tar.add(tmp_build, arcname=".")
+        finally:
+            shutil.rmtree(tmp_build, ignore_errors=True)
+
+        # 3. Process deploy job
+        deployment_id = await deployer_service.process_deploy_job({
+            "build_id": build_id,
+            "project_id": project_id,
+            "artifact_path": artifact_rel,
+            "runtime": "static"
+        })
+
+        assert deployment_id is not None
+
+        # Verify deployment record
+        dep = await db.deployments.find_one({"_id": ObjectId(deployment_id)})
+        assert dep["status"] == "READY"
+
+        # Verify index.html exists at top-level deployment directory
+        deploy_dir = os.path.join(settings.STORAGE_PATH, "deployments", deployment_id)
+        assert os.path.exists(os.path.join(deploy_dir, "index.html"))
+        assert os.path.exists(os.path.join(deploy_dir, "app.js"))
+
+        # Verify project status
+        proj = await db.projects.find_one({"_id": ObjectId(project_id)})
+        assert proj["status"] == ProjectStatus.DEPLOYED.value
+        assert proj["active_deployment_id"] == deployment_id
+    finally:
+        await close_database_connection()
+

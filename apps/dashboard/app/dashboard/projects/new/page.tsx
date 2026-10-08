@@ -153,7 +153,7 @@ export default function NewProjectPage() {
     setUploadProgress('Cloning repository and inspecting build manifest...');
 
     try {
-      const res = await api.importGitProject(projName, gitUrl.trim(), gitBranch.trim() || 'main', slug.trim() || undefined);
+      const res = await api.importGitProject(projName, gitUrl.trim(), gitBranch.trim() || undefined, slug.trim() || undefined);
       addToast({
         title: 'Git import initialized',
         description: 'Cloning repository and initiating pipeline.',
