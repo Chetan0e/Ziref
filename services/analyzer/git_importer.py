@@ -201,12 +201,19 @@ class GitImporter:
             # Remove .git directory if present to avoid storing large git history
             dot_git = os.path.join(temp_dir, ".git")
             if os.path.exists(dot_git):
-                shutil.rmtree(dot_git, ignore_errors=True)
+                def _handle_readonly(func, path, _):
+                    import stat
+                    try:
+                        os.chmod(path, stat.S_IWRITE)
+                        func(path)
+                    except Exception:
+                        pass
+                shutil.rmtree(dot_git, onerror=_handle_readonly)
 
             # If GitHub extracted a single root folder (e.g. repo-main/ or repo-HEAD/), resolve it
-            subdirs = [os.path.join(temp_dir, d) for d in os.listdir(temp_dir) if os.path.isdir(os.path.join(temp_dir, d))]
+            subdirs = [os.path.join(temp_dir, d) for d in os.listdir(temp_dir) if os.path.isdir(os.path.join(temp_dir, d)) and d != ".git"]
             effective_dir = temp_dir
-            if len(subdirs) == 1 and len(os.listdir(temp_dir)) == 1:
+            if len(subdirs) == 1 and len([e for e in os.listdir(temp_dir) if e != ".git"]) == 1:
                 effective_dir = subdirs[0]
 
             # If a subpath was requested in the URL (e.g. tree/main/client), target it
@@ -216,10 +223,12 @@ class GitImporter:
                     logger.info(f"Targeting requested subfolder: {details['subpath']}")
                     effective_dir = sub_target
 
-            # 3. Create a clean ZIP archive of this project directory
+            # 3. Create a clean ZIP archive of this project directory (exclude .git entirely)
             target_zip = os.path.join(tempfile.gettempdir(), f"git_export_{os.path.basename(temp_dir)}.zip")
             with zipfile.ZipFile(target_zip, "w", zipfile.ZIP_DEFLATED) as zf:
                 for root, dirs, files in os.walk(effective_dir):
+                    if ".git" in dirs:
+                        dirs.remove(".git")
                     for file in files:
                         full_path = os.path.join(root, file)
                         rel_path = os.path.relpath(full_path, effective_dir)
@@ -234,7 +243,14 @@ class GitImporter:
 
         except Exception:
             if os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir, ignore_errors=True)
+                def _handle_readonly(func, path, _):
+                    import stat
+                    try:
+                        os.chmod(path, stat.S_IWRITE)
+                        func(path)
+                    except Exception:
+                        pass
+                shutil.rmtree(temp_dir, onerror=_handle_readonly)
             raise
 
 git_importer = GitImporter()

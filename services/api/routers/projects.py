@@ -29,6 +29,8 @@ class GitImportRequest(BaseModel):
     repo_url: str
     branch: Optional[str] = None
     slug: Optional[str] = None
+    build_command: Optional[str] = None
+    output_directory: Optional[str] = None
 
 def _slugify(text: str) -> str:
     text = text.lower().strip()
@@ -145,8 +147,8 @@ async def import_git_project(payload: GitImportRequest, token_data: Dict[str, An
             slug = f"{base_slug}-{counter}"
             counter += 1
 
-        build_cmd = analysis.buildCommand
-        out_dir = analysis.outputDirectory or "."
+        build_cmd = payload.build_command if payload.build_command is not None else analysis.buildCommand
+        out_dir = payload.output_directory if payload.output_directory is not None else (analysis.outputDirectory or ".")
 
         proj_doc = {
             "user_id": token_data["sub"],

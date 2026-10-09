@@ -43,8 +43,16 @@ async def close_redis():
         _redis_pool = None
 
 async def _execute_job_in_background(queue_name: str, payload: Dict[str, Any]):
-    """Instantly executes jobs in background when Redis queue daemon is not active."""
+    """Executes jobs in background when external worker daemon or Redis is not active (e.g. pytest, standalone)."""
     try:
+        from services.api.core.database import get_database
+        import time
+        db = get_database()
+        hb = await db.system_status.find_one({"_id": "worker_heartbeat"})
+        if hb and hb.get("source") == "worker_daemon" and (time.time() - hb.get("time", 0)) < 15.0:
+            # Dedicated worker daemon is active; let it process the job via queue
+            return
+
         if queue_name == "build":
             from services.builder.build_executor import build_pipeline_executor
             await build_pipeline_executor.process_build_job(payload)
@@ -85,7 +93,7 @@ async def push_job(queue_name: str, payload: Dict[str, Any]) -> None:
         _memory_queues[queue_name] = asyncio.Queue()
     await _memory_queues[queue_name].put(payload)
 
-    # 3. Direct async execution in current event loop to guarantee zero stall
+    # 3. Trigger fallback in-process execution (auto-yields if worker_daemon is running)
     asyncio.create_task(_execute_job_in_background(queue_name, payload))
 
 async def pop_job(queue_name: str, timeout: int = 2) -> Optional[Dict[str, Any]]:
@@ -170,10 +178,13 @@ async def subscribe_events(channel: str) -> AsyncGenerator[Dict[str, Any], None]
     # Resilient memory fallback with active database status check
     q: asyncio.Queue = asyncio.Queue()
     _memory_subscribers.setdefault(channel, []).append(q)
+    seen_event_keys = set()
     try:
         while True:
             try:
                 evt = await asyncio.wait_for(q.get(), timeout=1.0)
+                evt_key = f"{evt.get('stage')}_{evt.get('message')}"
+                seen_event_keys.add(evt_key)
                 yield evt
                 if evt.get("stage") in ["done", "completed"] or "[STREAM_CLOSED]" in evt.get("message", ""):
                     break
@@ -187,14 +198,27 @@ async def subscribe_events(channel: str) -> AsyncGenerator[Dict[str, Any], None]
                         from services.api.core.database import get_database
                         from bson import ObjectId
                         db = get_database()
-                        if target_type == "mobile" and ObjectId.is_valid(target_id):
+                        if target_type == "build":
+                            # Relay events from other processes recorded in DB
+                            cursor = db.build_events.find({"build_id": target_id}).sort("timestamp", 1)
+                            async for b_evt in cursor:
+                                b_key = f"{b_evt.get('stage')}_{b_evt.get('message')}"
+                                if b_key not in seen_event_keys:
+                                    seen_event_keys.add(b_key)
+                                    yield {
+                                        "stage": b_evt.get("stage"),
+                                        "level": b_evt.get("level"),
+                                        "message": b_evt.get("message"),
+                                        "timestamp": b_evt.get("timestamp")
+                                    }
+                            if ObjectId.is_valid(target_id):
+                                doc = await db.builds.find_one({"_id": ObjectId(target_id)})
+                                if doc and doc.get("status") in ["BUILT", "FAILED", "CANCELLED"]:
+                                    yield {"stage": "done", "level": "info", "message": f"[STREAM_CLOSED] Build finished with status: {doc.get('status')}"}
+                                    break
+                        elif target_type == "mobile" and ObjectId.is_valid(target_id):
                             doc = await db.mobile_builds.find_one({"_id": ObjectId(target_id)})
                             if doc and doc.get("status") in ["APP_READY", "APP_FAILED"]:
-                                yield {"stage": "done", "level": "info", "message": "[STREAM_CLOSED]"}
-                                break
-                        elif target_type == "build" and ObjectId.is_valid(target_id):
-                            doc = await db.builds.find_one({"_id": ObjectId(target_id)})
-                            if doc and doc.get("status") in ["BUILT", "FAILED", "CANCELLED"]:
                                 yield {"stage": "done", "level": "info", "message": "[STREAM_CLOSED]"}
                                 break
                     except Exception:

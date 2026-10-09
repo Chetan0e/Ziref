@@ -338,7 +338,7 @@ async def stream_build_logs(build_id: str):
         try:
             async for live_evt in subscribe_events(f"build:{build_id}:logs"):
                 yield f"data: {json.dumps(live_evt)}\n\n"
-                if live_evt.get("stage") in [BuildStatus.BUILT.value, "done", "completed"] or "Build failed" in live_evt.get("message", ""):
+                if live_evt.get("stage") in [BuildStatus.BUILT.value, "done", "completed"] or "[STREAM_CLOSED]" in live_evt.get("message", ""):
                     break
         except asyncio.CancelledError:
             pass

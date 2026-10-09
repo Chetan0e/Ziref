@@ -54,7 +54,7 @@ Write-Host ""
 $venv = Join-Path $Root ".venv\Scripts"
 
 $jobs = @(
-    Start-Job -Name "API"        -ScriptBlock { param($r,$v) Set-Location $r; & "$v\uvicorn" services.api.main:app --port 8000 --reload 2>&1 } -ArgumentList $Root, $venv
+    Start-Job -Name "API"        -ScriptBlock { param($r,$v) Set-Location $r; & "$v\uvicorn" services.api.main:app --port 8000 --reload --reload-dir services 2>&1 } -ArgumentList $Root, $venv
     Start-Job -Name "Worker"     -ScriptBlock { param($r,$v) Set-Location $r; & "$v\python" -m services.worker.main 2>&1 }                     -ArgumentList $Root, $venv
     Start-Job -Name "SiteRouter" -ScriptBlock { param($r,$v,$p) Set-Location $r; $env:SITE_ROUTER_PORT=$p; & "$v\python" -m services.deployer.main 2>&1 } -ArgumentList $Root, $venv, $siteRouterPort
     Start-Job -Name "Dashboard"  -ScriptBlock { param($r)    Set-Location $r; pnpm --filter dashboard dev 2>&1 }                                -ArgumentList $Root

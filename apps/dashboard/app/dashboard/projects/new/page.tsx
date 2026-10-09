@@ -38,6 +38,9 @@ export default function NewProjectPage() {
   // Git state
   const [gitUrl, setGitUrl] = useState('');
   const [gitBranch, setGitBranch] = useState('main');
+  const [gitBuildCommand, setGitBuildCommand] = useState('');
+  const [gitOutputDir, setGitOutputDir] = useState('');
+  const [showGitAdvanced, setShowGitAdvanced] = useState(false);
 
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
@@ -153,7 +156,14 @@ export default function NewProjectPage() {
     setUploadProgress('Cloning repository and inspecting build manifest...');
 
     try {
-      const res = await api.importGitProject(projName, gitUrl.trim(), gitBranch.trim() || undefined, slug.trim() || undefined);
+      const res = await api.importGitProject(
+        projName,
+        gitUrl.trim(),
+        gitBranch.trim() || undefined,
+        slug.trim() || undefined,
+        gitBuildCommand.trim() || undefined,
+        gitOutputDir.trim() || undefined
+      );
       addToast({
         title: 'Git import initialized',
         description: 'Cloning repository and initiating pipeline.',
@@ -334,6 +344,54 @@ export default function NewProjectPage() {
                 placeholder="e.g. my-app"
                 className="w-full px-3.5 py-2 bg-[var(--surface-muted)] border border-[var(--border)] rounded-lg text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-sky-500 font-mono transition-colors"
               />
+            </div>
+
+            {/* Advanced Build Overrides */}
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={() => setShowGitAdvanced(!showGitAdvanced)}
+                className="inline-flex items-center gap-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors py-1"
+              >
+                <Settings className="w-3.5 h-3.5 text-purple-400" />
+                <span className="font-medium">
+                  {showGitAdvanced ? 'Hide Build Configuration' : 'Advanced Build Configuration (Optional)'}
+                </span>
+              </button>
+
+              {showGitAdvanced && (
+                <div className="mt-2.5 p-4 rounded-xl bg-[var(--surface-muted)] border border-[var(--border)] space-y-3">
+                  <p className="text-[11px] text-[var(--text-secondary)]">
+                    Override auto-detection if your repository has a custom build script, subfolder, or output directory.
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-medium text-[var(--text-secondary)] mb-1">
+                        Build Command
+                      </label>
+                      <input
+                        type="text"
+                        value={gitBuildCommand}
+                        onChange={(e) => setGitBuildCommand(e.target.value)}
+                        placeholder="e.g. npm run build"
+                        className="w-full px-3 py-1.5 bg-[var(--surface)] border border-[var(--border)] rounded-lg text-xs font-mono text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-purple-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-[var(--text-secondary)] mb-1">
+                        Output Directory
+                      </label>
+                      <input
+                        type="text"
+                        value={gitOutputDir}
+                        onChange={(e) => setGitOutputDir(e.target.value)}
+                        placeholder="e.g. dist, build, or frontend/dist"
+                        className="w-full px-3 py-1.5 bg-[var(--surface)] border border-[var(--border)] rounded-lg text-xs font-mono text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-purple-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

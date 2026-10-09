@@ -110,7 +110,8 @@ class ApiClient {
     let res: Response;
     const controller = new AbortController();
     const isUpload = options.body instanceof FormData;
-    const timeoutMs = isUpload ? 120000 : 15000;
+    const isLongOp = isUpload || endpoint.includes('import-git') || endpoint.includes('redeploy');
+    const timeoutMs = isLongOp ? 180000 : 30000;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
@@ -268,7 +269,9 @@ class ApiClient {
     name: string,
     repoUrl: string,
     branch?: string,
-    slug?: string
+    slug?: string,
+    buildCommand?: string,
+    outputDirectory?: string
   ): Promise<{
     project_id: string;
     slug: string;
@@ -278,7 +281,14 @@ class ApiClient {
   }> {
     return this.request('/api/v1/projects/import-git', {
       method: 'POST',
-      body: JSON.stringify({ name, repo_url: repoUrl, branch, slug }),
+      body: JSON.stringify({
+        name,
+        repo_url: repoUrl,
+        branch,
+        slug,
+        build_command: buildCommand || undefined,
+        output_directory: outputDirectory || undefined,
+      }),
     });
   }
 

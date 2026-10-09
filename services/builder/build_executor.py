@@ -30,14 +30,23 @@ class BuildPipelineExecutor:
         db = get_database()
         start_time = time.time()
 
-        # Update build status to BUILDING
-        await db.builds.update_one(
-            {"_id": ObjectId(build_id)},
+        # Atomically claim build to prevent race conditions across parallel workers/threads
+        res = await db.builds.update_one(
+            {
+                "_id": ObjectId(build_id),
+                "status": {"$in": [BuildStatus.QUEUED.value, "QUEUED", "queued"]}
+            },
             {"$set": {
                 "status": BuildStatus.BUILDING.value,
                 "started_at": utc_now_iso()
             }}
         )
+        if res.matched_count == 0:
+            existing = await db.builds.find_one({"_id": ObjectId(build_id)})
+            if existing and existing.get("status") in [BuildStatus.BUILDING.value, BuildStatus.BUILT.value]:
+                logger.info(f"Build {build_id} is already in state '{existing.get('status')}'. Skipping duplicate run.")
+                return
+
         await db.projects.update_one(
             {"_id": ObjectId(project_id)},
             {"$set": {"status": ProjectStatus.BUILDING.value}}
@@ -210,6 +219,13 @@ class BuildPipelineExecutor:
             except Exception:
                 pass
 
+            # Signal successful completion to stream
+            await emit_log(BuildLogEvent(
+                stage="done",
+                level=LogLevel.INFO,
+                message="[STREAM_CLOSED] Build completed successfully."
+            ))
+
             # Trigger auto-deployment
             await push_job("deploy", {
                 "build_id": build_id,
@@ -220,7 +236,7 @@ class BuildPipelineExecutor:
 
         except Exception as e:
             duration = round(time.time() - start_time, 2)
-            error_msg = str(e)
+            error_msg = str(e).strip() or getattr(e, "message", "") or f"{type(e).__name__}: Build execution interrupted"
             logger.error(f"Build failed for {build_id}: {error_msg}")
 
             await emit_log(BuildLogEvent(
@@ -240,6 +256,12 @@ class BuildPipelineExecutor:
                 stage="diagnosis",
                 level=LogLevel.WARNING,
                 message=f"[DIAGNOSIS: {diagnosis.category}] {diagnosis.summary} -> Fix: {diagnosis.actionable_fix}"
+            ))
+
+            await emit_log(BuildLogEvent(
+                stage="done",
+                level=LogLevel.INFO,
+                message=f"[STREAM_CLOSED] Build finished with status: FAILED"
             ))
 
             await db.builds.update_one(

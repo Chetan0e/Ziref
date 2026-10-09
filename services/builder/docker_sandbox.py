@@ -170,17 +170,31 @@ class DockerSandbox:
                 if os.path.exists(os.path.join(target, "index.html")) or len(os.listdir(target)) > 0:
                     return target
 
-        # 3. Check root directory for index.html (static HTML projects or in-place builds)
+        # 3. Check common mono-repo subfolders (client, frontend, web, app, ui, src)
+        for sub in ["frontend", "client", "web", "app", "ui", "src"]:
+            sub_dir = os.path.join(root_dir, sub)
+            if os.path.isdir(sub_dir):
+                if configured_output_dir and configured_output_dir not in [".", "./"]:
+                    sub_target = os.path.abspath(os.path.join(sub_dir, configured_output_dir))
+                    if os.path.exists(sub_target) and os.path.isdir(sub_target):
+                        return sub_target
+                for candidate in ["dist", "build", "out", "public", ".next", ".output/public"]:
+                    sub_cand = os.path.join(sub_dir, candidate)
+                    if os.path.exists(sub_cand) and os.path.isdir(sub_cand):
+                        if os.path.exists(os.path.join(sub_cand, "index.html")) or len(os.listdir(sub_cand)) > 0:
+                            return sub_cand
+
+        # 4. Check root directory for index.html (static HTML projects or in-place builds)
         if os.path.exists(os.path.join(root_dir, "index.html")):
             return root_dir
 
-        # 4. Search for index.html anywhere in root_dir
+        # 5. Search for index.html anywhere in root_dir
         html_files = glob.glob(os.path.join(root_dir, "**", "index.html"), recursive=True)
         if html_files:
             html_files.sort(key=lambda p: len(os.path.relpath(p, root_dir).split(os.sep)))
             return os.path.dirname(html_files[0])
 
-        # 5. Fallback to root_dir
+        # 6. Fallback to root_dir
         return root_dir
 
     async def _execute_docker(
@@ -293,7 +307,7 @@ class DockerSandbox:
         """Fallback local subprocess runner with devDependencies and path isolation."""
         env = {
             **os.environ,
-            "CI": "true",
+            "CI": "false",
             **env_vars
         }
         # Do not enforce NODE_ENV=production during dependency installation so devDependencies (vite, tsc, etc.) are installed
@@ -342,43 +356,37 @@ class DockerSandbox:
 
             await proc.wait()
             if proc.returncode != 0:
-                # If pnpm or yarn failed, attempt graceful fallback to npm install
-                if package_manager in ["pnpm", "yarn", "bun"]:
-                    await log_callback(BuildLogEvent(
-                        stage=BuildStage.DEPENDENCIES.value,
-                        level=LogLevel.WARNING,
-                        message=f"{package_manager} install exited with {proc.returncode}. Attempting npm install fallback..."
-                    ))
-                    fallback_proc = await asyncio.create_subprocess_shell(
-                        "npm install --include=dev",
-                        cwd=workspace_dir,
-                        env=env,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT
-                    )
-                    while True:
-                        line = await fallback_proc.stdout.readline()
-                        if not line:
-                            break
-                        msg = line.decode('utf-8', errors='replace').strip()
-                        if msg:
-                            await log_callback(BuildLogEvent(
-                                stage=BuildStage.DEPENDENCIES.value,
-                                level=LogLevel.INFO,
-                                message=msg
-                            ))
-                    await fallback_proc.wait()
-                    if fallback_proc.returncode != 0:
-                        raise SandboxExecutionError(
-                            f"Dependency installation failed with code {fallback_proc.returncode}",
+                # If pnpm/yarn/bun failed, or if npm failed, attempt fallback to npm install with --legacy-peer-deps
+                fallback_cmd = "npm install --include=dev --legacy-peer-deps"
+                await log_callback(BuildLogEvent(
+                    stage=BuildStage.DEPENDENCIES.value,
+                    level=LogLevel.WARNING,
+                    message=f"{package_manager} install returned code {proc.returncode}. Retrying with '{fallback_cmd}' for peer dependency resiliency..."
+                ))
+                fallback_proc = await asyncio.create_subprocess_shell(
+                    fallback_cmd,
+                    cwd=workspace_dir,
+                    env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT
+                )
+                while True:
+                    line = await fallback_proc.stdout.readline()
+                    if not line:
+                        break
+                    msg = line.decode('utf-8', errors='replace').strip()
+                    if msg:
+                        await log_callback(BuildLogEvent(
                             stage=BuildStage.DEPENDENCIES.value,
-                            exit_code=fallback_proc.returncode
-                        )
-                else:
+                            level=LogLevel.INFO,
+                            message=msg
+                        ))
+                await fallback_proc.wait()
+                if fallback_proc.returncode != 0:
                     raise SandboxExecutionError(
-                        f"Dependency installation failed with code {proc.returncode}",
+                        f"Dependency installation failed with code {fallback_proc.returncode}",
                         stage=BuildStage.DEPENDENCIES.value,
-                        exit_code=proc.returncode
+                        exit_code=fallback_proc.returncode
                     )
 
             # Re-check node_modules/.bin after installation to add to PATH
@@ -430,7 +438,8 @@ class DockerSandbox:
 
             build_env = {
                 **env,
-                "NODE_ENV": "production"
+                "NODE_ENV": "production",
+                "CI": "false"
             }
 
             proc = await asyncio.create_subprocess_shell(

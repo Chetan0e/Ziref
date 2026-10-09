@@ -43,6 +43,7 @@ async def _publish_heartbeat():
 
         heartbeat_doc = {
             "status": "online",
+            "source": "worker_daemon",
             "timestamp": utc_now_iso(),
             "time": time.time(),
             "docker_available": docker_available,

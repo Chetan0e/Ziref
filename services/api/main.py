@@ -89,6 +89,13 @@ async def _embedded_worker_runner():
     while True:
         try:
             now = time.time()
+            db = get_database()
+            # If external worker daemon is active, yield queue polling to it
+            hb = await db.system_status.find_one({"_id": "worker_heartbeat"})
+            if hb and hb.get("source") == "worker_daemon" and (now - hb.get("time", 0)) < 15.0:
+                await asyncio.sleep(2.0)
+                continue
+
             if now - last_heartbeat >= 4.0:
                 last_heartbeat = now
                 await _publish_worker_heartbeat()
