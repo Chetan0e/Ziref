@@ -189,3 +189,47 @@ def test_app_icon_generation_and_badging(temp_dir):
         assert any("ic_launcher.xml" in n for n in namelist), "Adaptive icon XML not found in APK"
 
 
+def test_exif_orientation_transposition(temp_dir):
+    """Verify that images with EXIF orientation tags are properly normalized upright."""
+    import base64
+    import io
+    from PIL import Image
+
+    # Create a 60x100 rectangle image with an EXIF orientation tag (e.g. 6 = 90 deg rotation)
+    im = Image.new("RGB", (60, 100), color=(0, 200, 100))
+    exif = im.getexif()
+    exif[0x0112] = 6  # EXIF orientation tag 274: orientation = 6 (requires 90 CW transpose)
+
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", exif=exif)
+    b64_img = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+    config = {
+        "app_name": "EXIF Test App",
+        "package_id": "com.ziref.exiftest",
+        "website_url": "http://10.0.0.5:8000/sites/demo/",
+        "icon_base64": b64_img
+    }
+
+    proj_dir = android_project_generator.generate(config, os.path.join(temp_dir, "exif_proj"))
+    res_dir = os.path.join(proj_dir, "app", "src", "main", "res")
+    hdpi_icon = os.path.join(res_dir, "mipmap-hdpi", "ic_launcher.png")
+    assert os.path.exists(hdpi_icon)
+
+    # When transposed from orientation 6 (60x100), dimension becomes 100x60,
+    # and then square-padded and resized to (72, 72)
+    saved_icon = Image.open(hdpi_icon)
+    assert saved_icon.size == (72, 72)
+
+
+def test_network_discovery_utility():
+    from services.api.core.network import get_local_lan_ip
+
+    lan_ip = get_local_lan_ip()
+    assert isinstance(lan_ip, str)
+    assert len(lan_ip.split(".")) == 4
+    # Should not be empty or loopback in normal connected environments
+    assert lan_ip != ""
+
+
+

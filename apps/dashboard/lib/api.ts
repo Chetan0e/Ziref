@@ -4,6 +4,7 @@ import {
   Deployment,
   MobileApp,
   MobileBuild,
+  NetworkInfo,
   EnvVar,
   User,
   AnalysisResult,
@@ -408,6 +409,10 @@ class ApiClient {
     return this.request<MobileApp[]>(`/api/v1/projects/${projectId}/apps`);
   }
 
+  async getProjectNetworkInfo(projectId: string): Promise<NetworkInfo> {
+    return this.request<NetworkInfo>(`/api/v1/projects/${projectId}/network-info`);
+  }
+
   async createMobileApp(
     projectId: string,
     config: {
@@ -419,6 +424,7 @@ class ApiClient {
       orientation?: string;
       permissions?: string[];
       icon_base64?: string;
+      website_url?: string;
     }
   ): Promise<MobileApp> {
     return this.request<MobileApp>(`/api/v1/projects/${projectId}/apps`, {
@@ -435,10 +441,6 @@ class ApiClient {
 
   async getMobileBuild(buildId: string): Promise<MobileBuild> {
     return this.request<MobileBuild>(`/api/v1/mobile-builds/${buildId}`);
-  }
-
-  getPreviewUrl(slug: string): string {
-    return `${DEPLOY_BASE}/sites/${slug}/`;
   }
 
   getMobileApkDownloadUrl(buildId: string): string {

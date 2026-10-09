@@ -212,16 +212,22 @@ class MainActivity : AppCompatActivity() {{
             userAgentString = userAgentString + " ZirefMobileApp/1.0"
         }}
 
+        val prefs = getSharedPreferences("ziref_prefs", MODE_PRIVATE)
+        val initialUrl = prefs.getString("target_url", targetUrl) ?: targetUrl
+
         swipeRefresh.setOnRefreshListener {{ webView.reload() }}
         webView.webViewClient = object : WebViewClient() {{
             override fun onPageFinished(view: WebView?, url: String?) {{
                 swipeRefresh.isRefreshing = false
+                if (url != null && !url.startsWith("data:")) {{
+                    prefs.edit().putString("target_url", url).apply()
+                }}
             }}
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {{
                 handler?.proceed()
             }}
         }}
-        webView.loadUrl(targetUrl)
+        webView.loadUrl(initialUrl)
     }}
 
     override fun onBackPressed() {{
@@ -306,6 +312,24 @@ public class MainActivity extends Activity {{
         rootLayout.addView(progressBar);
         setContentView(rootLayout);
 
+        webView.addJavascriptInterface(new Object() {{
+            @android.webkit.JavascriptInterface
+            public void saveAndLoad(final String newUrl) {{
+                runOnUiThread(new Runnable() {{
+                    @Override
+                    public void run() {{
+                        if (newUrl != null && !newUrl.trim().isEmpty()) {{
+                            getSharedPreferences("ziref_prefs", MODE_PRIVATE)
+                                .edit()
+                                .putString("target_url", newUrl.trim())
+                                .apply();
+                            webView.loadUrl(newUrl.trim());
+                        }}
+                    }}
+                }});
+            }}
+        }}, "AndroidBridge");
+
         webView.setWebChromeClient(new WebChromeClient() {{
             @Override
             public void onProgressChanged(WebView view, int newProgress) {{
@@ -327,8 +351,20 @@ public class MainActivity extends Activity {{
 
         webView.setWebViewClient(new WebViewClient() {{
             @Override
+            public void onPageFinished(WebView view, String url) {{
+                if (url != null && !url.startsWith("data:") && !url.contains("showOfflinePage")) {{
+                    getSharedPreferences("ziref_prefs", MODE_PRIVATE)
+                        .edit()
+                        .putString("target_url", url)
+                        .apply();
+                }}
+            }}
+
+            @Override
             public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {{
-                handler.proceed();
+                if (handler != null) {{
+                    handler.proceed();
+                }}
             }}
 
             @Override
@@ -354,7 +390,8 @@ public class MainActivity extends Activity {{
             }}
         }});
 
-        webView.loadUrl(targetUrl);
+        String savedUrl = getSharedPreferences("ziref_prefs", MODE_PRIVATE).getString("target_url", targetUrl);
+        webView.loadUrl(savedUrl != null && !savedUrl.isEmpty() ? savedUrl : targetUrl);
     }}
 
     private void showOfflinePage(WebView view, String failedUrl) {{
@@ -381,7 +418,13 @@ public class MainActivity extends Activity {{
             + "<script>"
             + "function retryConnection(){{"
             + "  var url = document.getElementById('urlInput').value.trim();"
-            + "  if(url){{ window.location.href = url; }}"
+            + "  if(url){{"
+            + "    if(window.AndroidBridge && window.AndroidBridge.saveAndLoad){{"
+            + "      window.AndroidBridge.saveAndLoad(url);"
+            + "    }} else {{"
+            + "      window.location.href = url;"
+            + "    }}"
+            + "  }}"
             + "}}"
             + "</script>"
             + "</body></html>";
@@ -511,7 +554,7 @@ public class MainActivity extends Activity {{
         Returns detected background color (hex string) for adaptive icon background.
         """
         import io
-        from PIL import Image, ImageDraw, ImageFont
+        from PIL import Image, ImageDraw, ImageFont, ImageOps
 
         density_sizes = {
             "mipmap-mdpi": ((48, 48), (108, 108)),
@@ -531,10 +574,21 @@ public class MainActivity extends Activity {{
                 if "," in raw_b64:
                     raw_b64 = raw_b64.split(",", 1)[1]
                 img_data = base64.b64decode(raw_b64)
-                source_img = Image.open(io.BytesIO(img_data)).convert("RGBA")
+                raw_img = Image.open(io.BytesIO(img_data))
+                # Transpose EXIF orientation so mobile camera / portrait photos display upright!
+                raw_img = ImageOps.exif_transpose(raw_img)
+                source_img = raw_img.convert("RGBA")
                 logger.info(f"Loaded user app icon: {source_img.size[0]}x{source_img.size[1]} px")
 
+                # Ensure rectangular logos are square-padded to prevent squishing/distortion
                 w_s, h_s = source_img.size
+                if w_s != h_s:
+                    side = max(w_s, h_s)
+                    sq_canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+                    sq_canvas.paste(source_img, ((side - w_s) // 2, (side - h_s) // 2))
+                    source_img = sq_canvas
+                    w_s, h_s = side, side
+
                 corner_samples = [
                     source_img.getpixel((0, 0)),
                     source_img.getpixel((w_s - 1, 0)),

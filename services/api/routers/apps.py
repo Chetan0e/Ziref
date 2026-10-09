@@ -17,20 +17,80 @@ from services.api.core.database import get_database
 from services.api.core.security import get_current_user_token
 from services.api.core.models import MobileAppStatus
 from services.api.core.redis_client import push_job, subscribe_events
+from services.api.core.network import get_local_lan_ip
 from services.api.core.deployment_url import deployment_url_service
-from services.api.schemas.apps import MobileAppCreate, MobileAppResponse, MobileBuildResponse
+from services.api.schemas.apps import MobileAppCreate, MobileAppResponse, MobileBuildResponse, NetworkInfoResponse
 
 router = APIRouter(tags=["Appify (Mobile)"])
+
+
+def _to_mobile_build_response(b: Dict[str, Any]) -> MobileBuildResponse:
+    build_id = str(b["_id"])
+    apk_dl = f"/api/v1/mobile-builds/{build_id}/download/apk" if b.get("apk_artifact_id") else None
+    src_dl = f"/api/v1/mobile-builds/{build_id}/download/source" if b.get("source_artifact_id") else None
+    return MobileBuildResponse(
+        id=build_id,
+        mobile_app_id=b["mobile_app_id"],
+        project_id=b["project_id"],
+        status=b["status"],
+        build_target=b.get("build_target", "android"),
+        apk_artifact_id=b.get("apk_artifact_id"),
+        source_artifact_id=b.get("source_artifact_id"),
+        apk_download_url=apk_dl,
+        source_download_url=src_dl,
+        apk_filename=b.get("apk_filename"),
+        apk_sha256=b.get("apk_sha256"),
+        apk_size_bytes=b.get("apk_size_bytes"),
+        apk_package_name=b.get("apk_package_name"),
+        apk_version_name=b.get("apk_version_name"),
+        apk_version_code=b.get("apk_version_code"),
+        apk_signed=b.get("apk_signed", False),
+        apk_verified=b.get("apk_verified", False),
+        apk_target_url=b.get("apk_target_url"),
+        apk_url_is_localhost=b.get("apk_url_is_localhost", False),
+        error_message=b.get("error_message"),
+        started_at=b.get("started_at"),
+        completed_at=b.get("completed_at"),
+        created_at=b.get("created_at", "")
+    )
+
+
+@router.get("/projects/{project_id}/network-info", response_model=NetworkInfoResponse)
+async def get_project_network_info(project_id: str, token_data: Dict[str, Any] = Depends(get_current_user_token)):
+    db = get_database()
+    slug = "app"
+    active_url = None
+    if ObjectId.is_valid(project_id):
+        project = await db.projects.find_one({"_id": ObjectId(project_id), "user_id": token_data["sub"]})
+        if project:
+            slug = project.get("slug", "app")
+            active_url = project.get("active_url")
+
+    lan_ip = get_local_lan_ip()
+    return NetworkInfoResponse(
+        lan_ip=lan_ip,
+        port=8000,
+        lan_url=f"http://{lan_ip}:8000/sites/{slug}/",
+        localhost_url=f"http://localhost:8000/sites/{slug}/",
+        active_url=active_url
+    )
 
 
 @router.get("/projects/{project_id}/apps", response_model=List[MobileAppResponse])
 async def list_project_apps(project_id: str, token_data: Dict[str, Any] = Depends(get_current_user_token)):
     db = get_database()
-    cursor = db.mobile_apps.find({"project_id": project_id, "user_id": token_data["sub"]})
+    cursor = db.mobile_apps.find({"project_id": project_id, "user_id": token_data["sub"]}).sort("created_at", -1)
     apps = []
     async for a in cursor:
+        app_id_str = str(a["_id"])
+        latest_b = await db.mobile_builds.find_one(
+            {"mobile_app_id": app_id_str},
+            sort=[("created_at", -1)]
+        )
+        latest_build_resp = _to_mobile_build_response(latest_b) if latest_b else None
+
         apps.append(MobileAppResponse(
-            id=str(a["_id"]),
+            id=app_id_str,
             project_id=a["project_id"],
             app_name=a["app_name"],
             package_id=a["package_id"],
@@ -41,6 +101,9 @@ async def list_project_apps(project_id: str, token_data: Dict[str, Any] = Depend
             permissions=a.get("permissions", []),
             icon_base64=a.get("icon_base64"),
             website_url=a.get("website_url", ""),
+            website_url_is_localhost=a.get("website_url_is_localhost", False),
+            latest_build=latest_build_resp,
+            updated_at=a.get("updated_at"),
             created_at=a.get("created_at", "")
         ))
     return apps
@@ -70,36 +133,72 @@ async def create_mobile_app(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid app name: {name_reason}")
 
     slug = project["slug"]
+    lan_ip = get_local_lan_ip()
 
-    # Resolve the canonical deployment URL — stored by the deployer, never invented here
-    website_url = project.get("active_url")
-    if not website_url:
-        # No deployment yet — use the canonical URL that WILL be used when deployed
-        website_url = deployment_url_service.generate_public_url(slug)
+    # Determine target URL:
+    # 1. Explicit user override from payload (e.g. selected LAN IP or custom domain)
+    # 2. Existing active_url if it is public
+    # 3. LAN IP URL if in local development mode so physical Wi-Fi devices work seamlessly
+    # 4. Fallback to canonical development URL
+    if payload.website_url and payload.website_url.strip():
+        website_url = payload.website_url.strip()
+    elif project.get("active_url") and not deployment_url_service.is_localhost_url(project.get("active_url")):
+        website_url = project.get("active_url")
+    else:
+        if lan_ip and lan_ip != "127.0.0.1":
+            website_url = f"http://{lan_ip}:8000/sites/{slug}/"
+        else:
+            website_url = project.get("active_url") or deployment_url_service.generate_public_url(slug)
 
-    # Warn if URL is localhost (APK will not be able to connect from a physical device)
     is_localhost = deployment_url_service.is_localhost_url(website_url)
     now_str = utc_now_iso()
 
-    doc = {
-        "project_id": project_id,
-        "user_id": token_data["sub"],
-        "app_name": payload.app_name.strip(),
-        "package_id": payload.package_id.strip().lower(),
-        "version": payload.version,
-        "version_code": payload.version_code,
-        "theme": payload.theme,
-        "orientation": payload.orientation,
-        "permissions": payload.permissions or [],
-        "icon_base64": payload.icon_base64,
-        "website_url": website_url,
-        "website_url_is_localhost": is_localhost,
-        "created_at": now_str,
-        "updated_at": now_str
-    }
+    # Upsert: If mobile app already exists for this project, update it instead of creating duplicates
+    existing_app = await db.mobile_apps.find_one({"project_id": project_id, "user_id": token_data["sub"]})
+    if existing_app:
+        update_fields: Dict[str, Any] = {
+            "app_name": payload.app_name.strip(),
+            "package_id": payload.package_id.strip().lower(),
+            "version": payload.version,
+            "version_code": payload.version_code,
+            "theme": payload.theme,
+            "orientation": payload.orientation,
+            "permissions": payload.permissions or [],
+            "website_url": website_url,
+            "website_url_is_localhost": is_localhost,
+            "updated_at": now_str
+        }
+        if payload.icon_base64 is not None:
+            update_fields["icon_base64"] = payload.icon_base64
 
-    res = await db.mobile_apps.insert_one(doc)
-    doc["_id"] = res.inserted_id
+        await db.mobile_apps.update_one({"_id": existing_app["_id"]}, {"$set": update_fields})
+        doc = await db.mobile_apps.find_one({"_id": existing_app["_id"]})
+    else:
+        doc = {
+            "project_id": project_id,
+            "user_id": token_data["sub"],
+            "app_name": payload.app_name.strip(),
+            "package_id": payload.package_id.strip().lower(),
+            "version": payload.version,
+            "version_code": payload.version_code,
+            "theme": payload.theme,
+            "orientation": payload.orientation,
+            "permissions": payload.permissions or [],
+            "icon_base64": payload.icon_base64,
+            "website_url": website_url,
+            "website_url_is_localhost": is_localhost,
+            "created_at": now_str,
+            "updated_at": now_str
+        }
+        res = await db.mobile_apps.insert_one(doc)
+        doc["_id"] = res.inserted_id
+
+    # Check for existing latest build to attach
+    latest_b = await db.mobile_builds.find_one(
+        {"mobile_app_id": str(doc["_id"])},
+        sort=[("created_at", -1)]
+    )
+    latest_build_resp = _to_mobile_build_response(latest_b) if latest_b else None
 
     return MobileAppResponse(
         id=str(doc["_id"]),
@@ -113,6 +212,9 @@ async def create_mobile_app(
         permissions=doc.get("permissions", []),
         icon_base64=doc.get("icon_base64"),
         website_url=doc["website_url"],
+        website_url_is_localhost=doc.get("website_url_is_localhost", False),
+        latest_build=latest_build_resp,
+        updated_at=doc.get("updated_at"),
         created_at=doc["created_at"]
     )
 
@@ -172,34 +274,7 @@ async def get_mobile_build(build_id: str, token_data: Dict[str, Any] = Depends(g
     if not b or (b.get("user_id") and b.get("user_id") != token_data["sub"]):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Build not found")
 
-    apk_dl = f"/api/v1/mobile-builds/{build_id}/download/apk" if b.get("apk_artifact_id") else None
-    src_dl = f"/api/v1/mobile-builds/{build_id}/download/source" if b.get("source_artifact_id") else None
-
-    return MobileBuildResponse(
-        id=str(b["_id"]),
-        mobile_app_id=b["mobile_app_id"],
-        project_id=b["project_id"],
-        status=b["status"],
-        build_target=b.get("build_target", "android"),
-        apk_artifact_id=b.get("apk_artifact_id"),
-        source_artifact_id=b.get("source_artifact_id"),
-        apk_download_url=apk_dl,
-        source_download_url=src_dl,
-        apk_filename=b.get("apk_filename"),
-        apk_sha256=b.get("apk_sha256"),
-        apk_size_bytes=b.get("apk_size_bytes"),
-        apk_package_name=b.get("apk_package_name"),
-        apk_version_name=b.get("apk_version_name"),
-        apk_version_code=b.get("apk_version_code"),
-        apk_signed=b.get("apk_signed", False),
-        apk_verified=b.get("apk_verified", False),
-        apk_target_url=b.get("apk_target_url"),
-        apk_url_is_localhost=b.get("apk_url_is_localhost", False),
-        error_message=b.get("error_message"),
-        started_at=b.get("started_at"),
-        completed_at=b.get("completed_at"),
-        created_at=b.get("created_at", "")
-    )
+    return _to_mobile_build_response(b)
 
 @router.get("/mobile-builds/{build_id}/logs/stream")
 async def stream_mobile_build_logs(build_id: str):

@@ -116,7 +116,17 @@ export interface MobileApp {
   icon_base64?: string;
   website_url: string;
   website_url_is_localhost?: boolean;
+  latest_build?: MobileBuild;
+  updated_at?: string;
   created_at: string;
+}
+
+export interface NetworkInfo {
+  lan_ip: string;
+  port: number;
+  lan_url: string;
+  localhost_url: string;
+  active_url?: string;
 }
 
 export interface MobileBuild {

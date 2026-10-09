@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
-import { Project, MobileApp, MobileBuild } from '@ziref/types';
+import { Project, MobileApp, MobileBuild, NetworkInfo } from '@ziref/types';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { TerminalViewer } from '@/components/ui/TerminalViewer';
 import { formatDate, formatRelativeTime } from '@/lib/date';
@@ -15,6 +15,8 @@ import {
   Copy,
   Check,
   RefreshCw,
+  RotateCw,
+  Wifi,
   FolderGit2,
   ExternalLink,
   Settings,
@@ -41,6 +43,10 @@ export default function AppifyStudioPage() {
   const [appPermissions, setAppPermissions] = useState<string[]>([]);
   const [appLogo, setAppLogo] = useState<string | null>(null);
   const [logoFileName, setLogoFileName] = useState<string>('');
+  const [targetUrl, setTargetUrl] = useState<string>('');
+  const [networkInfo, setNetworkInfo] = useState<NetworkInfo | null>(null);
+  const [isSavingAppConfig, setIsSavingAppConfig] = useState(false);
+  const isAppFormTouchedRef = useRef(false);
   const [simulatorView, setSimulatorView] = useState<'app' | 'home'>('app');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -52,6 +58,42 @@ export default function AppifyStudioPage() {
   const [loadingProjects, setLoadingProjects] = useState(true);
   const { addToast } = useToast();
 
+  const hydrateProjectApp = async (proj: Project) => {
+    try {
+      const [apps, net] = await Promise.all([
+        api.getMobileApps(proj.id).catch(() => []),
+        api.getProjectNetworkInfo(proj.id).catch(() => null),
+      ]);
+      if (net) setNetworkInfo(net);
+
+      if (!isAppFormTouchedRef.current) {
+        if (apps && apps.length > 0) {
+          const saved = apps[0];
+          setAppName(saved.app_name);
+          setPackageId(saved.package_id);
+          setAppTheme(saved.theme || 'system');
+          setAppOrientation(saved.orientation || 'portrait');
+          setAppPermissions(saved.permissions || []);
+          if (saved.icon_base64) setAppLogo(saved.icon_base64);
+          if (saved.website_url) {
+            setTargetUrl(saved.website_url);
+          } else if (net?.lan_url) {
+            setTargetUrl(net.lan_url);
+          }
+          if (saved.latest_build && !isBuildingApp) {
+            setMobileBuild(saved.latest_build);
+          }
+        } else {
+          setAppName(proj.name);
+          setPackageId(`com.ziref.${proj.slug.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'app'}`);
+          if (net?.lan_url) {
+            setTargetUrl(net.lan_url);
+          }
+        }
+      }
+    } catch (_) {}
+  };
+
   const loadProjects = async () => {
     try {
       setLoadingProjects(true);
@@ -60,8 +102,7 @@ export default function AppifyStudioPage() {
       if (data.length > 0 && !selectedProjectId) {
         setSelectedProjectId(data[0].id);
         setSelectedProject(data[0]);
-        setAppName(data[0].name);
-        setPackageId(`com.ziref.${data[0].slug.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'app'}`);
+        hydrateProjectApp(data[0]);
       }
     } catch (err: any) {
       addToast({
@@ -83,8 +124,8 @@ export default function AppifyStudioPage() {
     const found = projects.find((p) => p.id === projectId);
     if (found) {
       setSelectedProject(found);
-      setAppName(found.name);
-      setPackageId(`com.ziref.${found.slug.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'app'}`);
+      isAppFormTouchedRef.current = false;
+      hydrateProjectApp(found);
     }
   };
 
@@ -110,6 +151,7 @@ export default function AppifyStudioPage() {
       const result = e.target?.result as string;
       setAppLogo(result);
       setLogoFileName(file.name);
+      isAppFormTouchedRef.current = true;
       addToast({
         title: 'App Icon Loaded',
         description: `Successfully loaded '${file.name}' for mobile packaging.`,
@@ -119,11 +161,70 @@ export default function AppifyStudioPage() {
     reader.readAsDataURL(file);
   };
 
+  const handleRotateLogo = () => {
+    if (!appLogo) return;
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.height;
+      canvas.height = img.width;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.rotate((90 * Math.PI) / 180);
+        ctx.drawImage(img, -img.width / 2, -img.height / 2);
+        const rotated = canvas.toDataURL('image/png');
+        setAppLogo(rotated);
+        isAppFormTouchedRef.current = true;
+        addToast({
+          title: 'Logo Rotated',
+          description: 'Icon rotated 90° clockwise.',
+          type: 'info',
+        });
+      }
+    };
+    img.src = appLogo;
+  };
+
   const handleRemoveLogo = () => {
     setAppLogo(null);
     setLogoFileName('');
+    isAppFormTouchedRef.current = true;
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+  };
+
+  const handleSaveConfig = async () => {
+    if (!selectedProjectId) return;
+    setIsSavingAppConfig(true);
+    try {
+      const app = await api.createMobileApp(selectedProjectId, {
+        app_name: appName,
+        package_id: packageId,
+        theme: appTheme,
+        orientation: appOrientation,
+        permissions: appPermissions,
+        icon_base64: appLogo || undefined,
+        website_url: targetUrl || undefined,
+      });
+      isAppFormTouchedRef.current = false;
+      addToast({
+        title: 'App Configuration Saved',
+        description: `Settings for '${app.app_name}' saved successfully.`,
+        type: 'success',
+      });
+      if (selectedProject) {
+        await hydrateProjectApp(selectedProject);
+      }
+    } catch (err: any) {
+      addToast({
+        title: 'Save Failed',
+        description: err.message || 'Could not save mobile app configuration.',
+        type: 'error',
+      });
+    } finally {
+      setIsSavingAppConfig(false);
     }
   };
 
@@ -148,7 +249,9 @@ export default function AppifyStudioPage() {
         orientation: appOrientation,
         permissions: appPermissions,
         icon_base64: appLogo || undefined,
+        website_url: targetUrl || undefined,
       });
+      isAppFormTouchedRef.current = false;
 
       const build = await api.triggerMobileBuild(app.id);
       setMobileBuild(build);
@@ -300,7 +403,10 @@ export default function AppifyStudioPage() {
                       type="text"
                       required
                       value={appName}
-                      onChange={(e) => setAppName(e.target.value)}
+                      onChange={(e) => {
+                        setAppName(e.target.value);
+                        isAppFormTouchedRef.current = true;
+                      }}
                       placeholder="My Mobile App"
                       className="w-full px-3.5 py-2 bg-[var(--surface-muted)] border border-[var(--border)] rounded-lg text-xs text-[var(--text-primary)] focus:outline-none focus:border-purple-500"
                     />
@@ -314,10 +420,98 @@ export default function AppifyStudioPage() {
                       type="text"
                       required
                       value={packageId}
-                      onChange={(e) => setPackageId(e.target.value)}
+                      onChange={(e) => {
+                        setPackageId(e.target.value);
+                        isAppFormTouchedRef.current = true;
+                      }}
                       placeholder="com.company.app"
                       className="w-full px-3.5 py-2 bg-[var(--surface-muted)] border border-[var(--border)] rounded-lg text-xs text-[var(--text-primary)] font-mono focus:outline-none focus:border-purple-500"
                     />
+                  </div>
+                </div>
+
+                {/* Target Web URL & Wi-Fi LAN Connectivity */}
+                <div className="p-4 rounded-xl border border-[var(--border)] bg-[var(--surface-muted)]/50 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                    <div>
+                      <label className="block text-xs font-semibold text-[var(--text-primary)]">
+                        Target Web URL (Embedded into APK)
+                      </label>
+                      <p className="text-[11px] text-[var(--text-secondary)]">
+                        For physical phones on Wi-Fi, use your PC's Wi-Fi IP so the app connects directly without localhost errors.
+                      </p>
+                    </div>
+                    {networkInfo && networkInfo.lan_ip && networkInfo.lan_ip !== '127.0.0.1' && (
+                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 w-fit">
+                        <Wifi className="w-3 h-3" />
+                        PC Wi-Fi IP: {networkInfo.lan_ip}
+                      </span>
+                    )}
+                  </div>
+
+                  <input
+                    type="url"
+                    value={targetUrl}
+                    onChange={(e) => {
+                      setTargetUrl(e.target.value);
+                      isAppFormTouchedRef.current = true;
+                    }}
+                    placeholder="http://192.168.x.x:8000/sites/..."
+                    className="w-full px-3.5 py-2 bg-[var(--surface)] border border-[var(--border)] rounded-lg text-xs font-mono text-[var(--text-primary)] focus:outline-none focus:border-purple-500"
+                  />
+
+                  {/* Preset Quick Selectors */}
+                  <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px]">
+                    <span className="text-[var(--text-muted)] text-[10px] font-medium">Quick Presets:</span>
+                    {networkInfo?.lan_url && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTargetUrl(networkInfo.lan_url);
+                          isAppFormTouchedRef.current = true;
+                        }}
+                        className={`px-2.5 py-1 rounded-md border text-[11px] transition-colors flex items-center gap-1.5 ${
+                          targetUrl === networkInfo.lan_url
+                            ? 'bg-purple-600/20 border-purple-500 text-purple-300 font-semibold shadow-sm'
+                            : 'bg-[var(--surface)] border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                        }`}
+                      >
+                        <Wifi className="w-3 h-3 text-emerald-400" />
+                        <span>Same Wi-Fi ({networkInfo.lan_ip})</span>
+                      </button>
+                    )}
+                    {networkInfo?.localhost_url && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTargetUrl(networkInfo.localhost_url);
+                          isAppFormTouchedRef.current = true;
+                        }}
+                        className={`px-2.5 py-1 rounded-md border text-[11px] transition-colors ${
+                          targetUrl === networkInfo.localhost_url
+                            ? 'bg-purple-600/20 border-purple-500 text-purple-300 font-semibold shadow-sm'
+                            : 'bg-[var(--surface)] border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                        }`}
+                      >
+                        Localhost (PC Emulator)
+                      </button>
+                    )}
+                    {selectedProject?.active_url && !selectedProject.active_url.includes('localhost') && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTargetUrl(selectedProject.active_url!);
+                          isAppFormTouchedRef.current = true;
+                        }}
+                        className={`px-2.5 py-1 rounded-md border text-[11px] transition-colors ${
+                          targetUrl === selectedProject.active_url
+                            ? 'bg-purple-600/20 border-purple-500 text-purple-300 font-semibold shadow-sm'
+                            : 'bg-[var(--surface)] border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                        }`}
+                      >
+                        Public Deployed URL
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -333,14 +527,25 @@ export default function AppifyStudioPage() {
                       </p>
                     </div>
                     {appLogo && (
-                      <button
-                        type="button"
-                        onClick={handleRemoveLogo}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-rose-500 hover:text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 rounded-md transition-colors"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                        <span>Remove Icon</span>
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleRotateLogo}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-purple-400 hover:text-purple-300 bg-purple-500/10 hover:bg-purple-500/20 rounded-md transition-colors"
+                          title="Rotate image 90° clockwise"
+                        >
+                          <RotateCw className="w-3 h-3" />
+                          <span>Rotate 90°</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleRemoveLogo}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-rose-500 hover:text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 rounded-md transition-colors"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Remove Icon</span>
+                        </button>
+                      </div>
                     )}
                   </div>
 
@@ -512,23 +717,44 @@ export default function AppifyStudioPage() {
                   </div>
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={isBuildingApp || !selectedProjectId}
-                  className="w-full flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg bg-purple-600 text-white font-semibold text-xs hover:bg-purple-500 transition-colors disabled:opacity-50 shadow-sm"
-                >
-                  {isBuildingApp ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Compiling Android APK in Sandbox...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Smartphone className="w-4 h-4" />
-                      <span>Build Native Android Package</span>
-                    </>
-                  )}
-                </button>
+                <div className="flex flex-wrap items-center gap-3 pt-2">
+                  <button
+                    type="submit"
+                    disabled={isBuildingApp || !selectedProjectId}
+                    className="flex-1 flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg bg-purple-600 text-white font-semibold text-xs hover:bg-purple-500 transition-colors disabled:opacity-50 shadow-sm"
+                  >
+                    {isBuildingApp ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Compiling Android APK in Sandbox...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Smartphone className="w-4 h-4" />
+                        <span>Build Native Android Package</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isBuildingApp || !selectedProjectId || isSavingAppConfig}
+                    onClick={handleSaveConfig}
+                    className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] text-[var(--text-primary)] font-semibold text-xs hover:bg-[var(--surface-hover)] transition-colors disabled:opacity-50 shadow-sm"
+                  >
+                    {isSavingAppConfig ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Saving...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4 text-emerald-400" />
+                        <span>Save Settings</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </form>
             </div>
 

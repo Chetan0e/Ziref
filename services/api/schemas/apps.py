@@ -11,21 +11,7 @@ class MobileAppCreate(BaseModel):
     orientation: str = "portrait"  # portrait, landscape, sensor
     permissions: Optional[List[str]] = []
     icon_base64: Optional[str] = None
-
-class MobileAppResponse(BaseModel):
-    id: str
-    project_id: str
-    app_name: str
-    package_id: str
-    version: str
-    version_code: int
-    theme: str
-    orientation: str
-    permissions: List[str] = []
-    icon_base64: Optional[str] = None
-    website_url: str
-    website_url_is_localhost: bool = False
-    created_at: str
+    website_url: Optional[str] = None  # Optional target URL override (e.g. Wi-Fi LAN IP)
 
 class MobileBuildResponse(BaseModel):
     id: str
@@ -53,3 +39,26 @@ class MobileBuildResponse(BaseModel):
     completed_at: Optional[str] = None
     created_at: str
 
+class MobileAppResponse(BaseModel):
+    id: str
+    project_id: str
+    app_name: str
+    package_id: str
+    version: str
+    version_code: int
+    theme: str
+    orientation: str
+    permissions: List[str] = []
+    icon_base64: Optional[str] = None
+    website_url: str
+    website_url_is_localhost: bool = False
+    latest_build: Optional[MobileBuildResponse] = None
+    updated_at: Optional[str] = None
+    created_at: str
+
+class NetworkInfoResponse(BaseModel):
+    lan_ip: str
+    port: int
+    lan_url: str
+    localhost_url: str
+    active_url: Optional[str] = None

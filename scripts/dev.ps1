@@ -53,14 +53,26 @@ Write-Host ""
 # -- Start each service as a background job ------------------
 $venv = Join-Path $Root ".venv\Scripts"
 
+# -- Detect local Wi-Fi / LAN IP for mobile devices --------
+$lanIp = "127.0.0.1"
+try {
+    $ipObj = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notmatch '^127\.' -and $_.IPAddress -notmatch '^169\.254\.' -and $_.InterfaceAlias -notmatch 'vEthernet|Loopback' } | Select-Object -First 1
+    if ($ipObj) { $lanIp = $ipObj.IPAddress }
+} catch {
+    $lanIp = "127.0.0.1"
+}
+
 $jobs = @(
-    Start-Job -Name "API"        -ScriptBlock { param($r,$v) Set-Location $r; & "$v\uvicorn" services.api.main:app --port 8000 --reload --reload-dir services 2>&1 } -ArgumentList $Root, $venv
+    Start-Job -Name "API"        -ScriptBlock { param($r,$v) Set-Location $r; & "$v\uvicorn" services.api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir services 2>&1 } -ArgumentList $Root, $venv
     Start-Job -Name "Worker"     -ScriptBlock { param($r,$v) Set-Location $r; & "$v\python" -m services.worker.main 2>&1 }                     -ArgumentList $Root, $venv
     Start-Job -Name "SiteRouter" -ScriptBlock { param($r,$v,$p) Set-Location $r; $env:SITE_ROUTER_PORT=$p; & "$v\python" -m services.deployer.main 2>&1 } -ArgumentList $Root, $venv, $siteRouterPort
     Start-Job -Name "Dashboard"  -ScriptBlock { param($r)    Set-Location $r; pnpm --filter dashboard dev 2>&1 }                                -ArgumentList $Root
 )
 
-Write-Host "[OK] API Gateway     -> http://localhost:8000" -ForegroundColor Green
+Write-Host "[OK] API Gateway (Local) -> http://localhost:8000" -ForegroundColor Green
+if ($lanIp -and $lanIp -ne "127.0.0.1") {
+    Write-Host "[OK] API Gateway (Wi-Fi) -> http://${lanIp}:8000 (Mobile / Physical Devices)" -ForegroundColor Green
+}
 Write-Host "[OK] API Docs        -> http://localhost:8000/docs" -ForegroundColor Green
 Write-Host "[OK] Worker Daemon   -> (background)" -ForegroundColor Green
 Write-Host "[OK] Site Router     -> http://localhost:$siteRouterPort" -ForegroundColor Green
