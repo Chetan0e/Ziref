@@ -232,4 +232,32 @@ def test_network_discovery_utility():
     assert lan_ip != ""
 
 
+def test_embedded_assets_packaging(temp_dir):
+    """Verify that deployment assets are copied into assets/www and packaged into APK."""
+    dep_dir = os.path.join(temp_dir, "fake_deployment")
+    os.makedirs(dep_dir, exist_ok=True)
+    with open(os.path.join(dep_dir, "index.html"), "w", encoding="utf-8") as f:
+        f.write("<!DOCTYPE html><html><body><h1>Wild Pedia Offline</h1></body></html>")
+    with open(os.path.join(dep_dir, "style.css"), "w", encoding="utf-8") as f:
+        f.write("body { background: #111; }")
 
+    config = {
+        "app_name": "Embedded Asset App",
+        "package_id": "com.ziref.embeddedtest",
+        "website_url": "file:///android_asset/www/index.html",
+        "deployment_dir": dep_dir
+    }
+
+    proj_dir = android_project_generator.generate(config, os.path.join(temp_dir, "emb_proj"))
+    assets_www = os.path.join(proj_dir, "app", "src", "main", "assets", "www")
+    assert os.path.exists(os.path.join(assets_www, "index.html"))
+    assert os.path.exists(os.path.join(assets_www, "style.css"))
+
+    apk_path = os.path.join(temp_dir, "embedded_app.apk")
+    mobile_build_pipeline._create_apk_package(apk_path, config, proj_dir)
+
+    assert os.path.exists(apk_path)
+    assert zipfile.is_zipfile(apk_path)
+    with zipfile.ZipFile(apk_path, "r") as zf:
+        namelist = zf.namelist()
+        assert any("assets/www/index.html" in n for n in namelist)

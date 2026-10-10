@@ -60,20 +60,38 @@ async def get_project_network_info(project_id: str, token_data: Dict[str, Any] =
     db = get_database()
     slug = "app"
     active_url = None
+    active_dep_id = None
     if ObjectId.is_valid(project_id):
         project = await db.projects.find_one({"_id": ObjectId(project_id), "user_id": token_data["sub"]})
         if project:
             slug = project.get("slug", "app")
             active_url = project.get("active_url")
+            active_dep_id = project.get("active_deployment_id")
 
     lan_ip = get_local_lan_ip()
+
+    # Check if deployed static assets exist
+    has_dep = False
+    if active_dep_id:
+        dep_dir = os.path.join(settings.STORAGE_PATH, "deployments", str(active_dep_id))
+        if os.path.isdir(dep_dir) and os.path.isfile(os.path.join(dep_dir, "index.html")):
+            has_dep = True
+    if not has_dep and slug:
+        slug_dir = os.path.join(settings.STORAGE_PATH, "deployments", slug)
+        if os.path.isdir(slug_dir) and os.path.isfile(os.path.join(slug_dir, "index.html")):
+            has_dep = True
+
     return NetworkInfoResponse(
         lan_ip=lan_ip,
         port=8000,
         lan_url=f"http://{lan_ip}:8000/sites/{slug}/",
         localhost_url=f"http://localhost:8000/sites/{slug}/",
-        active_url=active_url
+        emulator_url=f"http://10.0.2.2:8000/sites/{slug}/",
+        embedded_url="file:///android_asset/www/index.html",
+        active_url=active_url,
+        has_deployment=has_dep
     )
+
 
 
 @router.get("/projects/{project_id}/apps", response_model=List[MobileAppResponse])

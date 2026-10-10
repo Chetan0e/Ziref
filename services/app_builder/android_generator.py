@@ -108,12 +108,38 @@ dependencies {{
 }}
 """)
 
-        # 4. AndroidManifest.xml
+        # 4. AndroidManifest.xml & Assets
         main_dir = os.path.join(app_dir, "src", "main")
         java_src_dir = os.path.join(main_dir, "java", package_path)
         res_dir = os.path.join(main_dir, "res")
+        assets_dir = os.path.join(main_dir, "assets", "www")
         os.makedirs(java_src_dir, exist_ok=True)
         os.makedirs(res_dir, exist_ok=True)
+
+        # Copy deployed web assets into assets/www if available (makes the app 100% standalone)
+        deployment_dir = config.get("deployment_dir")
+        if not deployment_dir:
+            from services.api.core.config import settings
+            candidates = []
+            if config.get("active_deployment_id"):
+                candidates.append(os.path.join(settings.STORAGE_PATH, "deployments", str(config["active_deployment_id"])))
+            if config.get("project_slug"):
+                candidates.append(os.path.join(settings.STORAGE_PATH, "deployments", str(config["project_slug"])))
+            for cand in candidates:
+                if os.path.isdir(cand) and (os.path.isfile(os.path.join(cand, "index.html")) or os.listdir(cand)):
+                    deployment_dir = cand
+                    break
+
+        if deployment_dir and os.path.isdir(deployment_dir):
+            os.makedirs(assets_dir, exist_ok=True)
+            for item in os.listdir(deployment_dir):
+                s_item = os.path.join(deployment_dir, item)
+                d_item = os.path.join(assets_dir, item)
+                if os.path.isfile(s_item):
+                    shutil.copy2(s_item, d_item)
+                elif os.path.isdir(s_item):
+                    shutil.copytree(s_item, d_item, dirs_exist_ok=True)
+            logger.info(f"Packaged {len(os.listdir(assets_dir))} deployment files into assets/www for standalone mobile usage.")
 
         manifest_permissions = [
             '<uses-permission android:name="android.permission.INTERNET" />',
@@ -139,6 +165,12 @@ dependencies {{
 
     {permissions_xml}
 
+    <!-- Optional hardware features so all devices/emulators can install and launch the APK -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.location" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.faketouch" android:required="false" />
+
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
@@ -151,6 +183,9 @@ dependencies {{
         android:networkSecurityConfig="@xml/network_security_config">
         <activity
             android:name=".MainActivity"
+            android:label="@string/app_name"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
             {screen_orientation_attr}>
@@ -169,12 +204,16 @@ dependencies {{
             f.write(f"""package {package_id}
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Intent
-import android.graphics.Bitmap
+import android.graphics.Color
 import android.net.Uri
 import android.net.http.SslError
+import android.os.Build
 import android.os.Bundle
 import android.view.View
+import android.view.ViewGroup
+import android.webkit.PermissionRequest
 import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -182,27 +221,85 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.appcompat.app.AppCompatActivity
-import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import android.widget.FrameLayout
+import android.widget.ProgressBar
+import android.widget.Toast
 
-class MainActivity : AppCompatActivity() {{
-    private lateinit var webView: WebView
-    private val targetUrl = "{website_url}"
+class MainActivity : Activity() {{
+    private var webView: WebView? = null
+    private var progressBar: ProgressBar? = null
+    private val configuredTargetUrl = "{website_url}"
+
+    private fun isRunningOnEmulator(): Boolean {{
+        return (Build.FINGERPRINT.startsWith("generic")
+                || Build.FINGERPRINT.startsWith("unknown")
+                || Build.MODEL.contains("google_sdk")
+                || Build.MODEL.contains("Emulator")
+                || Build.MODEL.contains("Android SDK built for x86")
+                || Build.MANUFACTURER.contains("Genymotion")
+                || Build.HARDWARE.contains("goldfish")
+                || Build.HARDWARE.contains("ranchu")
+                || (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
+                || "google_sdk" == Build.PRODUCT)
+    }}
+
+    private fun hasEmbeddedAssets(): Boolean {{
+        return try {{
+            val list = assets.list("www")
+            list != null && list.isNotEmpty()
+        }} catch (_: Exception) {{
+            false
+        }}
+    }}
+
+    private fun resolveEffectiveUrl(raw: String?): String {{
+        val trimmed = raw?.trim().orEmpty()
+        val candidate = if (trimmed.isEmpty()) configuredTargetUrl else trimmed
+
+        if (candidate.startsWith("file:///android_asset/")) {{
+            return candidate
+        }}
+
+        val isLocal = candidate.contains("localhost") || candidate.contains("127.0.0.1")
+        if (isLocal) {{
+            if (isRunningOnEmulator()) {{
+                return candidate.replace("localhost", "10.0.2.2").replace("127.0.0.1", "10.0.2.2")
+            }} else if (hasEmbeddedAssets()) {{
+                return "file:///android_asset/www/index.html"
+            }}
+        }}
+
+        if (candidate.isEmpty() && hasEmbeddedAssets()) {{
+            return "file:///android_asset/www/index.html"
+        }}
+
+        return candidate.ifEmpty {{ "file:///android_asset/www/index.html" }}
+    }}
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {{
         super.onCreate(savedInstanceState)
-        val swipeRefresh = SwipeRefreshLayout(this)
-        webView = WebView(this)
-        swipeRefresh.addView(webView)
-        setContentView(swipeRefresh)
 
-        webView.settings.apply {{
+        val rootLayout = FrameLayout(this)
+        rootLayout.setBackgroundColor(Color.parseColor("#09090B"))
+
+        val wv = WebView(this)
+        wv.layoutParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        wv.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        wv.setBackgroundColor(Color.parseColor("#09090B"))
+        webView = wv
+
+        wv.settings.apply {{
             javaScriptEnabled = true
             domStorageEnabled = true
             databaseEnabled = true
             allowFileAccess = true
             allowContentAccess = true
+            allowFileAccessFromFileURLs = true
+            allowUniversalAccessFromFileURLs = true
             useWideViewPort = true
             loadWithOverviewMode = true
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
@@ -212,30 +309,167 @@ class MainActivity : AppCompatActivity() {{
             userAgentString = userAgentString + " ZirefMobileApp/1.0"
         }}
 
-        val prefs = getSharedPreferences("ziref_prefs", MODE_PRIVATE)
-        val initialUrl = prefs.getString("target_url", targetUrl) ?: targetUrl
+        val pb = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal)
+        pb.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 8)
+        pb.max = 100
+        pb.visibility = View.GONE
+        progressBar = pb
 
-        swipeRefresh.setOnRefreshListener {{ webView.reload() }}
-        webView.webViewClient = object : WebViewClient() {{
-            override fun onPageFinished(view: WebView?, url: String?) {{
-                swipeRefresh.isRefreshing = false
-                if (url != null && !url.startsWith("data:")) {{
-                    prefs.edit().putString("target_url", url).apply()
+        rootLayout.addView(wv)
+        rootLayout.addView(pb)
+        setContentView(rootLayout)
+
+        wv.addJavascriptInterface(object : Any() {{
+            @android.webkit.JavascriptInterface
+            fun saveAndLoad(newUrl: String?) {{
+                runOnUiThread {{
+                    if (!newUrl.isNullOrBlank()) {{
+                        val effective = resolveEffectiveUrl(newUrl.trim())
+                        getSharedPreferences("ziref_prefs", MODE_PRIVATE)
+                            .edit()
+                            .putString("target_url", effective)
+                            .apply()
+                        wv.loadUrl(effective)
+                    }}
                 }}
             }}
+
+            @android.webkit.JavascriptInterface
+            fun loadOffline() {{
+                runOnUiThread {{
+                    wv.loadUrl("file:///android_asset/www/index.html")
+                }}
+            }}
+        }}, "AndroidBridge")
+
+        wv.webChromeClient = object : WebChromeClient() {{
+            override fun onProgressChanged(view: WebView?, newProgress: Int) {{
+                if (newProgress < 100) {{
+                    pb.visibility = View.VISIBLE
+                    pb.progress = newProgress
+                }} else {{
+                    pb.visibility = View.GONE
+                }}
+            }}
+
+            override fun onPermissionRequest(request: PermissionRequest?) {{
+                try {{
+                    request?.grant(request.resources)
+                }} catch (_: Exception) {{}}
+            }}
+        }}
+
+        wv.webViewClient = object : WebViewClient() {{
+            override fun onPageFinished(view: WebView?, url: String?) {{
+                if (url != null && !url.startsWith("data:") && !url.contains("showOfflinePage")) {{
+                    getSharedPreferences("ziref_prefs", MODE_PRIVATE)
+                        .edit()
+                        .putString("target_url", url)
+                        .apply()
+                }}
+            }}
+
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {{
                 handler?.proceed()
             }}
+
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {{
+                val url = request?.url?.toString() ?: return false
+                if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("file://") || url.startsWith("data:")) {{
+                    return false
+                }}
+                return try {{
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    true
+                }} catch (_: Exception) {{
+                    false
+                }}
+            }}
+
+            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {{
+                if (request != null && request.isForMainFrame) {{
+                    val failingUrl = request.url?.toString() ?: ""
+                    if (hasEmbeddedAssets() && !failingUrl.startsWith("file:///android_asset/")) {{
+                        runOnUiThread {{
+                            Toast.makeText(this@MainActivity, "Offline mode: Loaded embedded app", Toast.LENGTH_SHORT).show()
+                            wv.loadUrl("file:///android_asset/www/index.html")
+                        }}
+                        return
+                    }}
+                    showOfflinePage(view, failingUrl)
+                }}
+            }}
         }}
-        webView.loadUrl(initialUrl)
+
+        val prefs = getSharedPreferences("ziref_prefs", MODE_PRIVATE)
+        val initialUrl = resolveEffectiveUrl(prefs.getString("target_url", configuredTargetUrl))
+        wv.loadUrl(initialUrl)
+    }}
+
+    private fun showOfflinePage(view: WebView?, failedUrl: String) {{
+        val hasOffline = hasEmbeddedAssets()
+        val isLocal = failedUrl.contains("localhost") || failedUrl.contains("127.0.0.1")
+        val hint = if (isLocal) {{
+            "<p style='color:#eab308;font-size:13px;margin:12px 0;'>Notice: Target URL is set to localhost. Make sure your PC and phone are on the same Wi-Fi and use your PC's IP address (e.g. http://192.168.x.x:8000), or launch the embedded offline app.</p>"
+        }} else {{
+            "<p style='color:#a1a1aa;font-size:14px;margin:12px 0;'>Please check your network connection and try again.</p>"
+        }}
+
+        val offlineBtn = if (hasOffline) {{
+            "<button onclick='loadOfflineApp()' style='background:#10b981;margin-bottom:10px;'>Open Standalone App (Offline)</button>"
+        }} else ""
+
+        val html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1.0'>" +
+            "<style>" +
+            "body{{font-family:-apple-system,BlinkMacSystemFont,\\"Segoe UI\\",Roboto,sans-serif;background:#09090b;color:#ffffff;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px;box-sizing:border-box;text-align:center;}}" +
+            ".card{{background:#18181b;border:1px solid #27272a;border-radius:16px;padding:32px 24px;max-width:420px;width:100%;box-shadow:0 10px 25px rgba(0,0,0,0.5);}}" +
+            "h2{{font-size:22px;margin:0 0 10px 0;font-weight:700;color:#f4f4f5;}}" +
+            "input{{width:100%;padding:12px;margin:14px 0;border-radius:8px;border:1px solid #3f3f46;background:#09090b;color:#fff;font-size:14px;box-sizing:border-box;}}" +
+            "button{{background:#0284c7;color:#ffffff;border:none;padding:12px 24px;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;width:100%;transition:background 0.2s;}}" +
+            "button:active{{background:#0369a1;}}" +
+            "</style></head><body>" +
+            "<div class='card'>" +
+            "<h2>Unable to Connect</h2>" +
+            hint +
+            offlineBtn +
+            "<input id='urlInput' type='text' value='$failedUrl' placeholder='http://192.168.x.x:8000/sites/...'>" +
+            "<button onclick='retryConnection()'>Connect / Retry</button>" +
+            "</div>" +
+            "<script>" +
+            "function retryConnection(){{" +
+            "  var url = document.getElementById('urlInput').value.trim();" +
+            "  if(url){{ if(window.AndroidBridge && window.AndroidBridge.saveAndLoad){{ window.AndroidBridge.saveAndLoad(url); }} else {{ window.location.href = url; }} }}" +
+            "}}" +
+            "function loadOfflineApp(){{" +
+            "  if(window.AndroidBridge && window.AndroidBridge.loadOffline){{ window.AndroidBridge.loadOffline(); }} else {{ window.location.href = 'file:///android_asset/www/index.html'; }}" +
+            "}}" +
+            "</script>" +
+            "</body></html>"
+
+        view?.loadDataWithBaseURL(failedUrl, html, "text/html", "UTF-8", failedUrl)
     }}
 
     override fun onBackPressed() {{
-        if (::webView.isInitialized && webView.canGoBack()) {{
-            webView.goBack()
+        if (webView != null && webView!!.canGoBack()) {{
+            webView!!.goBack()
         }} else {{
             super.onBackPressed()
         }}
+    }}
+
+    override fun onPause() {{
+        super.onPause()
+        webView?.onPause()
+    }}
+
+    override fun onResume() {{
+        super.onResume()
+        webView?.onResume()
+    }}
+
+    override fun onDestroy() {{
+        webView?.destroy()
+        super.onDestroy()
     }}
 }}
 """)
@@ -247,10 +481,10 @@ class MainActivity : AppCompatActivity() {{
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
-import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.net.Uri;
 import android.net.http.SslError;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
@@ -264,11 +498,57 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.ProgressBar;
+import android.widget.Toast;
 
 public class MainActivity extends Activity {{
     private WebView webView;
     private ProgressBar progressBar;
-    private final String targetUrl = "{website_url}";
+    private final String configuredTargetUrl = "{website_url}";
+
+    private boolean isRunningOnEmulator() {{
+        return (Build.FINGERPRINT.startsWith("generic")
+                || Build.FINGERPRINT.startsWith("unknown")
+                || Build.MODEL.contains("google_sdk")
+                || Build.MODEL.contains("Emulator")
+                || Build.MODEL.contains("Android SDK built for x86")
+                || Build.MANUFACTURER.contains("Genymotion")
+                || Build.HARDWARE.contains("goldfish")
+                || Build.HARDWARE.contains("ranchu")
+                || (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
+                || "google_sdk".equals(Build.PRODUCT));
+    }}
+
+    private boolean hasEmbeddedAssets() {{
+        try {{
+            String[] list = getAssets().list("www");
+            return (list != null && list.length > 0);
+        }} catch (Exception ignored) {{
+            return false;
+        }}
+    }}
+
+    private String resolveEffectiveUrl(String raw) {{
+        String candidate = (raw != null && !raw.trim().isEmpty()) ? raw.trim() : configuredTargetUrl;
+
+        if (candidate.startsWith("file:///android_asset/")) {{
+            return candidate;
+        }}
+
+        boolean isLocal = candidate.contains("localhost") || candidate.contains("127.0.0.1");
+        if (isLocal) {{
+            if (isRunningOnEmulator()) {{
+                return candidate.replace("localhost", "10.0.2.2").replace("127.0.0.1", "10.0.2.2");
+            }} else if (hasEmbeddedAssets()) {{
+                return "file:///android_asset/www/index.html";
+            }}
+        }}
+
+        if (candidate.isEmpty() && hasEmbeddedAssets()) {{
+            return "file:///android_asset/www/index.html";
+        }}
+
+        return !candidate.isEmpty() ? candidate : "file:///android_asset/www/index.html";
+    }}
 
     @Override
     @SuppressLint("SetJavaScriptEnabled")
@@ -292,6 +572,8 @@ public class MainActivity extends Activity {{
         settings.setDatabaseEnabled(true);
         settings.setAllowFileAccess(true);
         settings.setAllowContentAccess(true);
+        settings.setAllowFileAccessFromFileURLs(true);
+        settings.setAllowUniversalAccessFromFileURLs(true);
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
@@ -319,12 +601,23 @@ public class MainActivity extends Activity {{
                     @Override
                     public void run() {{
                         if (newUrl != null && !newUrl.trim().isEmpty()) {{
+                            String effective = resolveEffectiveUrl(newUrl.trim());
                             getSharedPreferences("ziref_prefs", MODE_PRIVATE)
                                 .edit()
-                                .putString("target_url", newUrl.trim())
+                                .putString("target_url", effective)
                                 .apply();
-                            webView.loadUrl(newUrl.trim());
+                            webView.loadUrl(effective);
                         }}
+                    }}
+                }});
+            }}
+
+            @android.webkit.JavascriptInterface
+            public void loadOffline() {{
+                runOnUiThread(new Runnable() {{
+                    @Override
+                    public void run() {{
+                        webView.loadUrl("file:///android_asset/www/index.html");
                     }}
                 }});
             }}
@@ -385,20 +678,37 @@ public class MainActivity extends Activity {{
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {{
                 if (request != null && request.isForMainFrame()) {{
-                    showOfflinePage(view, request.getUrl().toString());
+                    final String failingUrl = request.getUrl() != null ? request.getUrl().toString() : "";
+                    if (hasEmbeddedAssets() && !failingUrl.startsWith("file:///android_asset/")) {{
+                        runOnUiThread(new Runnable() {{
+                            @Override
+                            public void run() {{
+                                Toast.makeText(MainActivity.this, "Offline mode: Loaded embedded app", Toast.LENGTH_SHORT).show();
+                                webView.loadUrl("file:///android_asset/www/index.html");
+                            }}
+                        }});
+                        return;
+                    }}
+                    showOfflinePage(view, failingUrl);
                 }}
             }}
         }});
 
-        String savedUrl = getSharedPreferences("ziref_prefs", MODE_PRIVATE).getString("target_url", targetUrl);
-        webView.loadUrl(savedUrl != null && !savedUrl.isEmpty() ? savedUrl : targetUrl);
+        String savedUrl = getSharedPreferences("ziref_prefs", MODE_PRIVATE).getString("target_url", configuredTargetUrl);
+        String initialEffectiveUrl = resolveEffectiveUrl(savedUrl);
+        webView.loadUrl(initialEffectiveUrl);
     }}
 
     private void showOfflinePage(WebView view, String failedUrl) {{
+        boolean hasOffline = hasEmbeddedAssets();
         boolean isLocal = failedUrl != null && (failedUrl.contains("localhost") || failedUrl.contains("127.0.0.1"));
         String hint = isLocal
-            ? "<p style='color:#eab308;font-size:13px;margin:12px 0;'>Notice: Target URL is set to localhost. Physical Android devices cannot connect to PC localhost directly. Make sure your PC and phone are on the same Wi-Fi and use your PC's IP address (e.g. http://192.168.x.x:8000), or deploy to a public URL.</p>"
+            ? "<p style='color:#eab308;font-size:13px;margin:12px 0;'>Notice: Target URL is set to localhost. Make sure your PC and phone are on the same Wi-Fi and use your PC's IP address (e.g. http://192.168.x.x:8000), or open the embedded standalone app.</p>"
             : "<p style='color:#a1a1aa;font-size:14px;margin:12px 0;'>Please check your network connection and try again.</p>";
+
+        String offlineBtn = hasOffline
+            ? "<button onclick='loadOfflineApp()' style='background:#10b981;margin-bottom:10px;'>Open Standalone App (Offline)</button>"
+            : "";
 
         String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1.0'>"
             + "<style>"
@@ -412,7 +722,8 @@ public class MainActivity extends Activity {{
             + "<div class='card'>"
             + "<h2>Unable to Connect</h2>"
             + hint
-            + "<input id='urlInput' type='text' value='" + (failedUrl != null ? failedUrl : targetUrl) + "' placeholder='http://192.168.x.x:8000/sites/...'>"
+            + offlineBtn
+            + "<input id='urlInput' type='text' value='" + (failedUrl != null ? failedUrl : configuredTargetUrl) + "' placeholder='http://192.168.x.x:8000/sites/...'>"
             + "<button onclick='retryConnection()'>Connect / Retry</button>"
             + "</div>"
             + "<script>"
@@ -426,6 +737,13 @@ public class MainActivity extends Activity {{
             + "    }}"
             + "  }}"
             + "}}"
+            + "function loadOfflineApp(){{"
+            + "  if(window.AndroidBridge && window.AndroidBridge.loadOffline){{"
+            + "    window.AndroidBridge.loadOffline();"
+            + "  }} else {{"
+            + "    window.location.href = 'file:///android_asset/www/index.html';"
+            + "  }}"
+            + "}}"
             + "</script>"
             + "</body></html>";
 
@@ -437,7 +755,7 @@ public class MainActivity extends Activity {{
         if (webView != null && webView.canGoBack()) {{
             webView.goBack();
         }} else {{
-            super.onBackPressed();
+            super.onBackPressed() ;
         }}
     }}
 
@@ -524,7 +842,24 @@ public class MainActivity extends Activity {{
 </network-security-config>
 """)
 
-        # 7. manifest.json
+        # 7. Copy static deployment assets into app/src/main/assets/www if available
+        dep_dir = config.get("deployment_dir")
+        if dep_dir and os.path.isdir(dep_dir):
+            assets_www_dir = os.path.join(app_dir, "src", "main", "assets", "www")
+            os.makedirs(assets_www_dir, exist_ok=True)
+            for item in os.listdir(dep_dir):
+                s_item = os.path.join(dep_dir, item)
+                d_item = os.path.join(assets_www_dir, item)
+                try:
+                    if os.path.isfile(s_item):
+                        shutil.copy2(s_item, d_item)
+                    elif os.path.isdir(s_item):
+                        shutil.copytree(s_item, d_item, dirs_exist_ok=True)
+                except Exception as e:
+                    logger.warning(f"Failed to copy asset {item} to assets/www: {e}")
+            logger.info(f"Copied static web assets from '{dep_dir}' into '{assets_www_dir}'")
+
+        # 8. manifest.json
         with open(os.path.join(abs_out, "manifest.json"), "w", encoding="utf-8") as f:
             f.write(f"""{{
   "name": "{app_name}",

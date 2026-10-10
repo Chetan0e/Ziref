@@ -62,3 +62,7 @@ class NetworkInfoResponse(BaseModel):
     lan_url: str
     localhost_url: str
     active_url: Optional[str] = None
+    emulator_url: Optional[str] = None
+    embedded_url: Optional[str] = None
+    has_deployment: bool = False
+

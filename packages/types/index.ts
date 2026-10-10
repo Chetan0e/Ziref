@@ -127,7 +127,11 @@ export interface NetworkInfo {
   lan_url: string;
   localhost_url: string;
   active_url?: string;
+  emulator_url?: string;
+  embedded_url?: string;
+  has_deployment?: boolean;
 }
+
 
 export interface MobileBuild {
   id: string;

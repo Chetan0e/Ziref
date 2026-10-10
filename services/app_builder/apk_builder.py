@@ -105,27 +105,46 @@ class MobileBuildPipeline:
 
             # 3. Retrieve Project & Deployment URL
             project_doc = await db.projects.find_one({"_id": ObjectId(project_id)})
+            slug = project_doc.get("slug", "app") if project_doc else "app"
+            active_dep_id = project_doc.get("active_deployment_id") if project_doc else None
 
-            # Use the stored website_url from the app config (set at creation time by the API,
-            # using DeploymentUrlService). Never fall back to slug.localhost:8080.
+            # Locate deployed web assets for bundling into standalone APK
+            deployment_dir = None
+            if active_dep_id:
+                dep_path = os.path.join(settings.STORAGE_PATH, "deployments", str(active_dep_id))
+                if os.path.isdir(dep_path):
+                    deployment_dir = dep_path
+            if not deployment_dir and slug:
+                slug_path = os.path.join(settings.STORAGE_PATH, "deployments", slug)
+                if os.path.isdir(slug_path):
+                    deployment_dir = slug_path
+
+            # Use stored website_url, fallback to active_url, or embedded asset url
             website_url = app_doc.get("website_url") or (
                 project_doc.get("active_url") if project_doc else None
             )
-            if not website_url and project_doc:
-                website_url = deployment_url_service.generate_public_url(project_doc.get("slug", "app"))
+            if not website_url and deployment_dir:
+                website_url = "file:///android_asset/www/index.html"
+            elif not website_url and project_doc:
+                website_url = deployment_url_service.generate_public_url(slug)
             if not website_url:
                 website_url = "https://ziref.app"
 
-            # Log a warning if the URL is localhost — the APK cannot reach this on a real device
             is_localhost = deployment_url_service.is_localhost_url(website_url)
             if is_localhost:
-                await emit_log(
-                    "validation",
-                    f"WARNING: Target URL '{website_url}' is a local address. "
-                    "The installed app will NOT be able to load content on a physical Android device. "
-                    "Deploy to a publicly reachable URL before building a distributable APK.",
-                    level=LogLevel.WARN
-                )
+                if deployment_dir:
+                    await emit_log(
+                        "validation",
+                        f"Target URL '{website_url}' is a local address. Deployed static assets discovered and will be embedded inside the APK for offline standalone usage.",
+                        level=LogLevel.INFO
+                    )
+                else:
+                    await emit_log(
+                        "validation",
+                        f"WARNING: Target URL '{website_url}' is a local address. "
+                        "The installed app will NOT be able to load content on a physical Android device unless connected to the host PC's Wi-Fi network.",
+                        level=LogLevel.WARN
+                    )
             else:
                 await emit_log("validation", f"Target URL validated: {website_url}")
 
@@ -138,7 +157,10 @@ class MobileBuildPipeline:
                 "theme": app_doc.get("theme", "system"),
                 "orientation": app_doc.get("orientation", "portrait"),
                 "permissions": app_doc.get("permissions", []),
-                "icon_base64": app_doc.get("icon_base64")
+                "icon_base64": app_doc.get("icon_base64"),
+                "deployment_dir": deployment_dir,
+                "project_slug": slug,
+                "active_deployment_id": str(active_dep_id) if active_dep_id else None,
             }
 
             await emit_log("generation", f"Generating Android Kotlin project structure for '{app_config['app_name']}'...")
@@ -443,7 +465,8 @@ class MobileBuildPipeline:
         raw_apk = os.path.join(temp_dir, "raw.apk")
         aligned_apk = os.path.join(temp_dir, "aligned.apk")
 
-        # 1. Package resources and compiled binary manifest with aapt
+        # 1. Package resources, assets, and compiled binary manifest with aapt
+        assets_path = os.path.join(app_dir, "src", "main", "assets")
         cmd_aapt = [
             tools["aapt"], "package", "-f",
             "-M", manifest_path,
@@ -451,6 +474,10 @@ class MobileBuildPipeline:
             "-I", tools["android_jar"],
             "-F", raw_apk
         ]
+        if os.path.isdir(assets_path) and os.listdir(assets_path):
+            cmd_aapt.extend(["-A", assets_path])
+            logger.info(f"Passing web assets directory to aapt: {assets_path}")
+
         res_aapt = subprocess.run(cmd_aapt, capture_output=True, text=True)
         if res_aapt.returncode != 0:
             raise Exception(f"aapt failed: {res_aapt.stderr or res_aapt.stdout}")
@@ -612,7 +639,24 @@ class MobileBuildPipeline:
                                 logger.debug(f"Packed resource: {rel_p}")
                         except Exception as e:
                             logger.warning(f"Failed to pack resource {rel_p}: {e}")
-        logger.info(f"Packed {icons_packed} resource files into APK")
+
+        # Pack any embedded static web assets from project_dir into the APK
+        assets_root = os.path.join(project_dir, "app", "src", "main", "assets")
+        assets_packed = 0
+        if os.path.isdir(assets_root):
+            for root, dirs, files in os.walk(assets_root):
+                for f in files:
+                    full_p = os.path.join(root, f)
+                    rel_p = "assets/" + os.path.relpath(full_p, assets_root).replace("\\", "/")
+                    if rel_p not in files_to_pack:
+                        try:
+                            with open(full_p, "rb") as fh:
+                                files_to_pack[rel_p] = fh.read()
+                                assets_packed += 1
+                                logger.debug(f"Packed asset: {rel_p}")
+                        except Exception as e:
+                            logger.warning(f"Failed to pack asset {rel_p}: {e}")
+        logger.info(f"Packed {icons_packed} resource files and {assets_packed} asset files into APK")
 
         # 5. Generate MANIFEST.MF
         manifest_mf_lines = [

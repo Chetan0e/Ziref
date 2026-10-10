@@ -182,6 +182,8 @@ function ProjectDetailContent({ params }: { params: Promise<{ id: string }> }) {
           if (savedApp.icon_base64) setAppLogo(savedApp.icon_base64);
           if (savedApp.website_url) {
             setTargetUrl(savedApp.website_url);
+          } else if (netInfo?.has_deployment && netInfo?.embedded_url) {
+            setTargetUrl(netInfo.embedded_url);
           } else if (netInfo?.lan_url) {
             setTargetUrl(netInfo.lan_url);
           }
@@ -194,7 +196,9 @@ function ProjectDetailContent({ params }: { params: Promise<{ id: string }> }) {
           if (!appName) {
             setAppName(proj.name);
             setPackageId(`com.ziref.${proj.slug.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'app'}`);
-            if (netInfo?.lan_url) {
+            if (netInfo?.has_deployment && netInfo?.embedded_url) {
+              setTargetUrl(netInfo.embedded_url);
+            } else if (netInfo?.lan_url) {
               setTargetUrl(netInfo.lan_url);
             }
           }
@@ -1540,6 +1544,23 @@ function ProjectDetailContent({ params }: { params: Promise<{ id: string }> }) {
                   {/* Preset Quick Selectors */}
                   <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px]">
                     <span className="text-[var(--text-muted)] text-[10px] font-medium">Quick Presets:</span>
+                    {networkInfo?.has_deployment && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTargetUrl(networkInfo.embedded_url || 'file:///android_asset/www/index.html');
+                          isAppFormTouchedRef.current = true;
+                        }}
+                        className={`px-2.5 py-1 rounded-md border text-[11px] transition-colors flex items-center gap-1.5 ${
+                          targetUrl === (networkInfo.embedded_url || 'file:///android_asset/www/index.html')
+                            ? 'bg-emerald-600/20 border-emerald-500 text-emerald-300 font-semibold shadow-sm'
+                            : 'bg-[var(--surface)] border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                        }`}
+                      >
+                        <Smartphone className="w-3 h-3 text-emerald-400" />
+                        <span>Standalone Offline (Embedded)</span>
+                      </button>
+                    )}
                     {networkInfo?.lan_url && (
                       <button
                         type="button"
@@ -1557,6 +1578,22 @@ function ProjectDetailContent({ params }: { params: Promise<{ id: string }> }) {
                         <span>Same Wi-Fi ({networkInfo.lan_ip})</span>
                       </button>
                     )}
+                    {networkInfo?.emulator_url && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTargetUrl(networkInfo.emulator_url!);
+                          isAppFormTouchedRef.current = true;
+                        }}
+                        className={`px-2.5 py-1 rounded-md border text-[11px] transition-colors ${
+                          targetUrl === networkInfo.emulator_url
+                            ? 'bg-purple-600/20 border-purple-500 text-purple-300 font-semibold shadow-sm'
+                            : 'bg-[var(--surface)] border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                        }`}
+                      >
+                        Emulator (10.0.2.2)
+                      </button>
+                    )}
                     {networkInfo?.localhost_url && (
                       <button
                         type="button"
@@ -1570,7 +1607,7 @@ function ProjectDetailContent({ params }: { params: Promise<{ id: string }> }) {
                             : 'bg-[var(--surface)] border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                         }`}
                       >
-                        Localhost (PC Emulator)
+                        Localhost (PC Only)
                       </button>
                     )}
                     {project.active_url && !project.active_url.includes('localhost') && (
