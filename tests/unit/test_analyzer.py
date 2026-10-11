@@ -95,3 +95,111 @@ async def test_sandbox_static_html_ignores_erroneous_build_command():
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
+def test_detect_mern_with_root_build_script(detector):
+    temp_dir = tempfile.mkdtemp()
+    try:
+        # Root backend package.json with express and build script targeting client
+        root_pkg = {
+            "name": "mern-ecommerce",
+            "version": "1.0.0",
+            "scripts": {
+                "start": "node server.js",
+                "build": "cd client && npm install && npm run build"
+            },
+            "dependencies": {
+                "express": "^4.18.2",
+                "mongoose": "^7.0.0",
+                "cors": "^2.8.5"
+            }
+        }
+        with open(os.path.join(temp_dir, "package.json"), "w") as f:
+            json.dump(root_pkg, f)
+
+        # Client frontend directory with React/Vite
+        client_dir = os.path.join(temp_dir, "client")
+        os.makedirs(client_dir, exist_ok=True)
+        client_pkg = {
+            "name": "client",
+            "scripts": {
+                "build": "vite build"
+            },
+            "dependencies": {
+                "react": "^18.2.0",
+                "react-dom": "^18.2.0"
+            },
+            "devDependencies": {
+                "vite": "^5.0.0"
+            }
+        }
+        with open(os.path.join(client_dir, "package.json"), "w") as f:
+            json.dump(client_pkg, f)
+
+        result = detector.analyze(temp_dir)
+        assert result.framework == "react"
+        assert result.runtime == "static"
+        assert result.buildCommand == "npm run build"
+        assert result.outputDirectory == "client/dist"
+        assert any("client" in w for w in result.warnings)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+def test_detect_mern_with_workspaces(detector):
+    temp_dir = tempfile.mkdtemp()
+    try:
+        root_pkg = {
+            "name": "mern-monorepo",
+            "workspaces": ["frontend", "backend"],
+            "scripts": {
+                "build": "npm run build --workspace=frontend"
+            }
+        }
+        with open(os.path.join(temp_dir, "package.json"), "w") as f:
+            json.dump(root_pkg, f)
+
+        # Frontend workspace directory
+        frontend_dir = os.path.join(temp_dir, "frontend")
+        os.makedirs(frontend_dir, exist_ok=True)
+        frontend_pkg = {
+            "name": "frontend",
+            "scripts": {"build": "react-scripts build"},
+            "dependencies": {
+                "react": "^18.2.0",
+                "react-dom": "^18.2.0",
+                "react-scripts": "5.0.1"
+            }
+        }
+        with open(os.path.join(frontend_dir, "package.json"), "w") as f:
+            json.dump(frontend_pkg, f)
+        os.makedirs(os.path.join(frontend_dir, "public"), exist_ok=True)
+
+        result = detector.analyze(temp_dir)
+        assert result.framework == "react"
+        assert result.runtime == "static"
+        assert result.outputDirectory == "frontend/build"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+def test_detect_mern_with_static_client(detector):
+    temp_dir = tempfile.mkdtemp()
+    try:
+        root_pkg = {
+            "name": "express-static-app",
+            "scripts": {"start": "node index.js"},
+            "dependencies": {"express": "^4.18.0"}
+        }
+        with open(os.path.join(temp_dir, "package.json"), "w") as f:
+            json.dump(root_pkg, f)
+
+        client_dir = os.path.join(temp_dir, "client")
+        os.makedirs(client_dir, exist_ok=True)
+        with open(os.path.join(client_dir, "index.html"), "w") as f:
+            f.write("<!DOCTYPE html><html><body><h1>Client Static App</h1></body></html>")
+
+        result = detector.analyze(temp_dir)
+        assert result.framework == "html"
+        assert result.runtime == "static"
+        assert result.outputDirectory == "client"
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+

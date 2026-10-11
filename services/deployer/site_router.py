@@ -1,4 +1,5 @@
 import os
+import re
 import glob
 import time
 import asyncio
@@ -121,6 +122,20 @@ async def _extract_slug_from_request(request: Request) -> Tuple[Optional[str], s
     if custom_slug:
         return custom_slug, path.lstrip("/")
 
+    # 4. Referer fallback for assets and sub-resources loaded by preview
+    referer = request.headers.get("referer", "") or request.headers.get("referrer", "")
+    if referer and "/sites/" in referer:
+        try:
+            from urllib.parse import urlparse
+            ref_path = urlparse(referer).path
+            if "/sites/" in ref_path:
+                parts = ref_path.split("/sites/")[1].strip("/").split("/")
+                if len(parts) >= 1 and parts[0]:
+                    ref_slug = parts[0]
+                    return ref_slug, path.lstrip("/")
+        except Exception:
+            pass
+
     return None, path.lstrip("/")
 
 async def _resolve_active_deployment_id(slug: str) -> Optional[str]:
@@ -173,8 +188,8 @@ def _apply_security_and_cache_headers(res: Response, clean_subpath: str) -> Resp
     # Standard production security headers
     res.headers["X-Content-Type-Options"] = "nosniff"
     res.headers["X-Frame-Options"] = "SAMEORIGIN"
-    # Allow embedding in local dashboard previews and mobile simulator
-    res.headers["Content-Security-Policy"] = "frame-ancestors 'self' http://localhost:* http://127.0.0.1:* *;"
+    # Allow embedding in local dashboard previews and mobile simulator across localhost ports
+    res.headers["Content-Security-Policy"] = "frame-ancestors 'self' http://localhost:* http://127.0.0.1:* http://localhost:3000 *;"
     res.headers["X-XSS-Protection"] = "1; mode=block"
     res.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     res.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
@@ -188,6 +203,52 @@ def _apply_security_and_cache_headers(res: Response, clean_subpath: str) -> Resp
     else:
         res.headers["Cache-Control"] = "public, max-age=86400"
     return res
+
+def _serve_transformed_html(html_file_path: str, slug: str) -> Response:
+    """
+    Reads index.html, injects <base href="/sites/{slug}/"> if missing,
+    and rewrites root-relative asset URLs (e.g. /assets/..., /static/...) to /sites/{slug}/...
+    so that frontend assets resolve without breaking in subpath previews.
+    """
+    try:
+        with open(html_file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        prefix = f"/sites/{slug}/"
+
+        # 1. Rewrite root-relative asset attributes (src="/...", href="/...", poster="/...")
+        def _rewrite_attr(match):
+            attr = match.group(1)
+            quote = match.group(2)
+            val = match.group(3)
+            # Skip external schemas or already-namespaced paths
+            if (
+                val.startswith("//")
+                or val.startswith("sites/")
+                or val.startswith("/sites/")
+                or any(val.startswith(p) for p in ["http://", "https://", "data:", "blob:", "mailto:", "tel:", "#", "javascript:"])
+            ):
+                return match.group(0)
+            clean_val = val.lstrip("/")
+            return f'{attr}={quote}{prefix}{clean_val}{quote}'
+
+        pattern = r'\b(src|href|poster)\s*=\s*(["\'])\/([^"\'\s>]+)\2'
+        content = re.sub(pattern, _rewrite_attr, content, flags=re.IGNORECASE)
+
+        # 2. Inject <base href="..."> if not already present
+        base_tag = f'<base href="/sites/{slug}/">'
+        if "<base " not in content.lower():
+            if re.search(r"<head[^>]*>", content, re.IGNORECASE):
+                content = re.sub(r"(<head[^>]*>)", r"\1\n    " + base_tag, content, count=1, flags=re.IGNORECASE)
+            elif re.search(r"<html[^>]*>", content, re.IGNORECASE):
+                content = re.sub(r"(<html[^>]*>)", r"\1\n<head>\n    " + base_tag + "\n</head>", content, count=1, flags=re.IGNORECASE)
+            else:
+                content = f"<head>{base_tag}</head>\n" + content
+
+        return HTMLResponse(content=content, status_code=200, media_type="text/html")
+    except Exception as e:
+        logger.warning(f"Error transforming HTML for {slug}: {e}")
+        return FileResponse(html_file_path, media_type="text/html")
 
 @app.api_route("/{full_path:path}", methods=["GET", "HEAD", "OPTIONS"])
 async def route_site(request: Request, full_path: str = ""):
@@ -250,19 +311,27 @@ async def route_site(request: Request, full_path: str = ""):
 
     # 1. Direct file match
     if os.path.isfile(target_file):
-        res = FileResponse(target_file, media_type=resolve_media_type(target_file))
+        ext = os.path.splitext(target_file)[1].lower()
+        if ext in [".html", ".htm"]:
+            res = _serve_transformed_html(target_file, slug)
+        else:
+            res = FileResponse(target_file, media_type=resolve_media_type(target_file))
 
     # 1b. Check if asset exists inside a subfolder in deploy_root
     elif clean_subpath:
         sub_matches = glob.glob(os.path.join(deploy_root, "**", os.path.basename(clean_subpath)), recursive=True)
         if sub_matches and os.path.isfile(sub_matches[0]):
-            res = FileResponse(sub_matches[0], media_type=resolve_media_type(sub_matches[0]))
+            ext = os.path.splitext(sub_matches[0])[1].lower()
+            if ext in [".html", ".htm"]:
+                res = _serve_transformed_html(sub_matches[0], slug)
+            else:
+                res = FileResponse(sub_matches[0], media_type=resolve_media_type(sub_matches[0]))
 
     # 2. Directory match -> look for index.html
     if res is None and os.path.isdir(target_file):
         index_file = os.path.join(target_file, "index.html")
         if os.path.isfile(index_file):
-            res = FileResponse(index_file, media_type="text/html")
+            res = _serve_transformed_html(index_file, slug)
 
     # 3. Root index.html check (SPA fallback)
     if res is None:
@@ -270,12 +339,12 @@ async def route_site(request: Request, full_path: str = ""):
         if os.path.isfile(index_html):
             ext = os.path.splitext(clean_subpath)[1]
             if not ext or ext.lower() in [".html", ".htm"]:
-                res = FileResponse(index_html, media_type="text/html")
+                res = _serve_transformed_html(index_html, slug)
         else:
             # Check nested index.html
             nested_html = glob.glob(os.path.join(deploy_root, "**", "index.html"), recursive=True)
             if nested_html:
-                res = FileResponse(nested_html[0], media_type="text/html")
+                res = _serve_transformed_html(nested_html[0], slug)
 
     if res is None:
         ext = os.path.splitext(clean_subpath)[1].lower()

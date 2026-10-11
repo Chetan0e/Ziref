@@ -268,6 +268,30 @@ from services.deployer.site_router import route_site
 async def site_router_preview_gateway(request: Request, full_path: str = ""):
     return await route_site(request, full_path)
 
+# Sub-resource & asset routing gateways on port 8000 for previewed sites
+@app.api_route("/assets/{full_path:path}", methods=["GET", "HEAD", "OPTIONS"])
+@app.api_route("/static/{full_path:path}", methods=["GET", "HEAD", "OPTIONS"])
+@app.api_route("/_next/{full_path:path}", methods=["GET", "HEAD", "OPTIONS"])
+async def site_router_asset_gateway(request: Request, full_path: str = ""):
+    return await route_site(request, full_path)
+
+@app.middleware("http")
+async def preview_asset_fallback_middleware(request: Request, call_next):
+    # Intercept non-API requests from previewed sites identified by Referer
+    path = request.url.path
+    if (
+        request.method in ["GET", "HEAD", "OPTIONS"]
+        and not path.startswith("/api/")
+        and not path.startswith("/health")
+        and not path.startswith("/docs")
+        and not path.startswith("/openapi.json")
+        and not path.startswith("/sites")
+    ):
+        referer = request.headers.get("referer", "") or request.headers.get("referrer", "")
+        if "/sites/" in referer:
+            return await route_site(request, path.lstrip("/"))
+    return await call_next(request)
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("services.api.main:app", host="0.0.0.0", port=8000, reload=True)

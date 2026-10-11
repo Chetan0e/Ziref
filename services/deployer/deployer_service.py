@@ -81,7 +81,13 @@ class DeployerService:
 
             # If target_deploy_dir does not have index.html at root, locate index.html and unwrap its containing directory
             if not os.path.exists(os.path.join(target_deploy_dir, "index.html")):
-                html_files = glob.glob(os.path.join(target_deploy_dir, "**", "index.html"), recursive=True)
+                ignored_deploy_parts = {"node_modules", ".git", ".venv", "__pycache__"}
+                raw_html_files = glob.glob(os.path.join(target_deploy_dir, "**", "index.html"), recursive=True)
+                html_files = [
+                    p for p in raw_html_files
+                    if not any(ign in os.path.relpath(p, target_deploy_dir).split(os.sep) for ign in ignored_deploy_parts)
+                ]
+
                 if html_files:
                     html_files.sort(key=lambda p: len(os.path.relpath(p, target_deploy_dir).split(os.sep)))
                     containing_dir = os.path.dirname(html_files[0])
@@ -100,6 +106,16 @@ class DeployerService:
                                         pass
                             shutil.move(src, dst)
                         shutil.rmtree(containing_dir, ignore_errors=True)
+
+                        # Clean up any leftover empty directories up to target_deploy_dir
+                        curr = containing_dir
+                        while curr and curr != target_deploy_dir and os.path.exists(curr):
+                            try:
+                                if not os.listdir(curr):
+                                    shutil.rmtree(curr, ignore_errors=True)
+                                curr = os.path.dirname(curr)
+                            except Exception:
+                                break
 
             # Mirror deployment to slug directory for direct filesystem routing resiliency
             slug_deploy_dir = os.path.join(settings.STORAGE_PATH, "deployments", slug)

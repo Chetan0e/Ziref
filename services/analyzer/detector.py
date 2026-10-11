@@ -24,11 +24,25 @@ class ProjectDetector:
 
         if has_package_json:
             result = self._analyze_node_project(root_dir, package_json_path, warnings)
-            # If root package.json is a mono-repo / generic, check for a frontend subfolder
-            if result.framework == "nodejs" and result.buildCommand is None:
-                frontend_result = self._detect_frontend_subfolder(root_dir, warnings)
+            # If root package.json is a mono-repo / generic (Express, Fastify, MERN backend),
+            # or specifies npm/yarn workspaces, always prioritize frontend subfolder if present
+            try:
+                with open(package_json_path, "r", encoding="utf-8") as f:
+                    root_pkg = json.load(f)
+            except Exception:
+                root_pkg = {}
+
+            has_workspaces = "workspaces" in root_pkg
+            is_generic_or_backend = result.framework == "nodejs" or any(
+                b_dep in {**root_pkg.get("dependencies", {}), **root_pkg.get("devDependencies", {})}
+                for b_dep in ["express", "fastify", "koa", "mongoose", "mongodb", "cors"]
+            )
+
+            if is_generic_or_backend or has_workspaces:
+                frontend_result = self._detect_frontend_subfolder(root_dir, warnings, workspaces=root_pkg.get("workspaces"))
                 if frontend_result:
                     return frontend_result
+
             return result
 
         # No root package.json — check common frontend subfolder names
@@ -151,99 +165,157 @@ class ProjectDetector:
     ]
 
     def _detect_frontend_subfolder(
-        self, root_dir: str, warnings: List[str]
+        self, root_dir: str, warnings: List[str], workspaces: Optional[Any] = None
     ) -> Optional[AnalysisResult]:
         """
-        Scans known frontend subfolder names for a package.json with a frontend framework.
-        Returns an AnalysisResult with the subfolder as the build root if found, else None.
+        Scans known frontend subfolder names, workspaces, or subdirectories for a frontend app
+        (React, Vite, Next, Vue, HTML, etc.). Returns an AnalysisResult with the subfolder as the build root.
         """
-        # First check explicit known names
-        candidates = [
-            os.path.join(root_dir, name)
-            for name in self.FRONTEND_SUBFOLDERS
-            if os.path.isdir(os.path.join(root_dir, name))
-            and os.path.exists(os.path.join(root_dir, name, "package.json"))
-        ]
+        candidate_dirs: List[str] = []
 
-        # Also scan all immediate subdirectories for package.json with a frontend dep
+        # 1. Check workspace directories if configured
+        if workspaces:
+            workspace_list = workspaces if isinstance(workspaces, list) else workspaces.get("packages", []) if isinstance(workspaces, dict) else []
+            for ws in workspace_list:
+                ws_clean = ws.strip("/\\")
+                if "*" in ws_clean:
+                    for matched in glob.glob(os.path.join(root_dir, ws_clean)):
+                        if os.path.isdir(matched) and matched not in candidate_dirs:
+                            candidate_dirs.append(matched)
+                else:
+                    ws_dir = os.path.join(root_dir, ws_clean)
+                    if os.path.isdir(ws_dir) and ws_dir not in candidate_dirs:
+                        candidate_dirs.append(ws_dir)
+
+        # 2. Check explicit known frontend names
+        for name in self.FRONTEND_SUBFOLDERS:
+            sub = os.path.join(root_dir, name)
+            if os.path.isdir(sub) and sub not in candidate_dirs:
+                candidate_dirs.append(sub)
+
+        # 3. Also scan all other immediate subdirectories
         for entry in os.listdir(root_dir):
             full = os.path.join(root_dir, entry)
             if (
                 os.path.isdir(full)
-                and os.path.exists(os.path.join(full, "package.json"))
-                and full not in candidates
+                and not entry.startswith(".")
+                and entry not in ["node_modules", "backend", "server", "api", "dist", "build", "coverage", "__pycache__"]
+                and full not in candidate_dirs
             ):
-                candidates.append(full)
+                candidate_dirs.append(full)
 
-        for sub_dir in candidates:
+        FRONTEND_INDICATOR_DEPS = [
+            "react",
+            "react-dom",
+            "react-scripts",
+            "@vitejs/plugin-react",
+            "@vitejs/plugin-vue",
+            "vue",
+            "svelte",
+            "vite",
+            "@angular/core",
+            "next",
+            "astro",
+            "solid-js",
+            "preact",
+            "lit",
+            "nuxt",
+            "gatsby",
+            "webpack",
+            "parcel",
+            "esbuild",
+            "tailwindcss",
+            "@remix-run/react",
+        ]
+
+        for sub_dir in candidate_dirs:
             pkg_path = os.path.join(sub_dir, "package.json")
-            try:
-                with open(pkg_path, "r", encoding="utf-8") as f:
-                    pkg = json.load(f)
-            except Exception:
-                continue
+            has_sub_pkg = os.path.exists(pkg_path)
 
-            deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
-            # Only treat as frontend if it has a known UI framework/tool
-            is_frontend = any(
-                dep in deps
-                for dep in [
-                    "react",
-                    "react-dom",
-                    "vue",
-                    "svelte",
-                    "vite",
-                    "@angular/core",
-                    "next",
-                    "astro",
-                    "solid-js",
-                    "preact",
-                    "lit",
-                    "nuxt",
-                    "gatsby",
-                ]
-            )
-            if not is_frontend:
-                continue
+            if has_sub_pkg:
+                try:
+                    with open(pkg_path, "r", encoding="utf-8") as f:
+                        pkg = json.load(f)
+                except Exception:
+                    continue
 
-            warnings.append(
-                f"Mono-repo detected: using frontend subfolder '{os.path.basename(sub_dir)}' as build root."
-            )
-            result = self._analyze_node_project(sub_dir, pkg_path, warnings)
-            # Re-root the output directory relative to root_dir so the build executor can find it
-            rel_sub = os.path.relpath(sub_dir, root_dir).replace("\\", "/")
-            if result.outputDirectory and result.outputDirectory not in [".", "./"]:
-                result = AnalysisResult(
-                    projectType=result.projectType,
-                    framework=result.framework,
+                deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+                scripts = pkg.get("scripts", {})
+
+                has_frontend_dep = any(dep in deps for dep in FRONTEND_INDICATOR_DEPS)
+                has_frontend_scripts = any(
+                    any(tool in script.lower() for tool in ["vite", "react-scripts", "webpack", "next", "astro", "build"])
+                    for script in scripts.values()
+                )
+                has_html_or_src = (
+                    os.path.exists(os.path.join(sub_dir, "index.html"))
+                    or os.path.exists(os.path.join(sub_dir, "public", "index.html"))
+                    or os.path.isdir(os.path.join(sub_dir, "src"))
+                )
+
+                if not (has_frontend_dep or has_frontend_scripts or has_html_or_src):
+                    continue
+
+                warnings.append(
+                    f"Mono-repo/MERN detected: using frontend subfolder '{os.path.basename(sub_dir)}' as build root."
+                )
+                result = self._analyze_node_project(sub_dir, pkg_path, warnings)
+
+                # Re-root the output directory relative to root_dir
+                rel_sub = os.path.relpath(sub_dir, root_dir).replace("\\", "/")
+
+                # If framework returned generic nodejs but frontend indicators present, refine to react/vite
+                framework = result.framework
+                if framework == "nodejs":
+                    if "vite" in deps:
+                        framework = "vite"
+                    elif "react" in deps or "react-dom" in deps or "react-scripts" in deps:
+                        framework = "react"
+
+                out_dir = result.outputDirectory
+                if out_dir in [".", "./", None, ""]:
+                    # Default output folder based on framework
+                    if "react-scripts" in deps or os.path.exists(os.path.join(sub_dir, "public")):
+                        out_dir = "build"
+                    else:
+                        out_dir = "dist"
+
+                final_out = f"{rel_sub}/{out_dir}" if out_dir not in [".", "./"] else rel_sub
+
+                return AnalysisResult(
+                    projectType="web",
+                    framework=framework,
                     frameworkVersion=result.frameworkVersion,
                     language=result.language,
                     packageManager=result.packageManager,
-                    runtime=result.runtime,
-                    buildCommand=result.buildCommand,
+                    runtime="static",  # Always deploy static website for frontend
+                    buildCommand=result.buildCommand or (f"{result.packageManager} run build" if "build" in scripts else None),
                     startCommand=result.startCommand,
-                    outputDirectory=f"{rel_sub}/{result.outputDirectory}",
-                    port=result.port,
-                    confidence=result.confidence,
+                    outputDirectory=final_out,
+                    port=80,
+                    confidence=0.96,
                     warnings=result.warnings,
                 )
-            else:
-                result = AnalysisResult(
-                    projectType=result.projectType,
-                    framework=result.framework,
-                    frameworkVersion=result.frameworkVersion,
-                    language=result.language,
-                    packageManager=result.packageManager,
-                    runtime=result.runtime,
-                    buildCommand=result.buildCommand,
-                    startCommand=result.startCommand,
+
+            # Check if subfolder has index.html without package.json (static frontend)
+            elif os.path.exists(os.path.join(sub_dir, "index.html")):
+                rel_sub = os.path.relpath(sub_dir, root_dir).replace("\\", "/")
+                warnings.append(
+                    f"Mono-repo/MERN detected: using static frontend subfolder '{os.path.basename(sub_dir)}'."
+                )
+                return AnalysisResult(
+                    projectType="web",
+                    framework="html",
+                    language="html",
+                    packageManager="none",
+                    runtime="static",
+                    buildCommand=None,
+                    startCommand=None,
                     outputDirectory=rel_sub,
-                    port=result.port,
-                    confidence=result.confidence,
-                    warnings=result.warnings,
+                    port=80,
+                    confidence=0.95,
+                    warnings=warnings,
                 )
-            return result
-
         return None
 
     # -----------------------------------------------------------------------

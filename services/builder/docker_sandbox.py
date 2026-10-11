@@ -73,17 +73,26 @@ class DockerSandbox:
         # "client/dist", "frontend/build", etc.  We derive the correct
         # build-root (the subfolder containing package.json) from that.
         # ---------------------------------------------------------------
-        # Resolve build root (the directory containing package.json)
+        # Resolve build root (the directory containing package.json or frontend assets)
         build_root = root_dir  # default: build from workspace root
         if "/" in clean_out_dir or "\\" in clean_out_dir:
             sub_candidate = clean_out_dir.split("/")[0].split("\\")[0]
             sub_path = os.path.join(root_dir, sub_candidate)
-            if os.path.isdir(sub_path) and os.path.exists(os.path.join(sub_path, "package.json")):
+            if os.path.isdir(sub_path):
                 build_root = sub_path
-        elif not os.path.exists(os.path.join(build_root, "package.json")):
+        elif clean_out_dir and clean_out_dir not in [".", "./"]:
+            sub_path = os.path.join(root_dir, clean_out_dir)
+            if os.path.isdir(sub_path):
+                build_root = sub_path
+
+        # If build_root is root_dir but known frontend subfolder exists, prioritize frontend subfolder
+        if build_root == root_dir:
             for sub in ["client", "frontend", "web", "app", "ui", "src"]:
                 candidate = os.path.join(root_dir, sub)
-                if os.path.isdir(candidate) and os.path.exists(os.path.join(candidate, "package.json")):
+                if os.path.isdir(candidate) and (
+                    os.path.exists(os.path.join(candidate, "package.json"))
+                    or os.path.exists(os.path.join(candidate, "index.html"))
+                ):
                     build_root = candidate
                     break
 
@@ -152,6 +161,9 @@ class DockerSandbox:
         if configured_output_dir and configured_output_dir not in [".", "./"]:
             target = os.path.abspath(os.path.join(root_dir, configured_output_dir))
             if os.path.exists(target) and os.path.isdir(target):
+                browser_sub = os.path.join(target, "browser")
+                if os.path.exists(browser_sub):
+                    return browser_sub
                 return target
 
         # 2. Check standard build output directories first (prioritize compiled assets over raw sources)
@@ -171,28 +183,35 @@ class DockerSandbox:
                     return target
 
         # 3. Check common mono-repo subfolders (client, frontend, web, app, ui, src)
-        for sub in ["frontend", "client", "web", "app", "ui", "src"]:
+        for sub in ["client", "frontend", "web", "app", "ui", "src"]:
             sub_dir = os.path.join(root_dir, sub)
             if os.path.isdir(sub_dir):
-                if configured_output_dir and configured_output_dir not in [".", "./"]:
-                    sub_target = os.path.abspath(os.path.join(sub_dir, configured_output_dir))
-                    if os.path.exists(sub_target) and os.path.isdir(sub_target):
-                        return sub_target
                 for candidate in ["dist", "build", "out", "public", ".next", ".output/public"]:
                     sub_cand = os.path.join(sub_dir, candidate)
                     if os.path.exists(sub_cand) and os.path.isdir(sub_cand):
+                        browser_sub = os.path.join(sub_cand, "browser")
+                        if os.path.exists(browser_sub):
+                            return browser_sub
                         if os.path.exists(os.path.join(sub_cand, "index.html")) or len(os.listdir(sub_cand)) > 0:
                             return sub_cand
+                # Check if sub_dir itself contains index.html
+                if os.path.exists(os.path.join(sub_dir, "index.html")):
+                    return sub_dir
 
         # 4. Check root directory for index.html (static HTML projects or in-place builds)
         if os.path.exists(os.path.join(root_dir, "index.html")):
             return root_dir
 
-        # 5. Search for index.html anywhere in root_dir
-        html_files = glob.glob(os.path.join(root_dir, "**", "index.html"), recursive=True)
-        if html_files:
-            html_files.sort(key=lambda p: len(os.path.relpath(p, root_dir).split(os.sep)))
-            return os.path.dirname(html_files[0])
+        # 5. Search for index.html anywhere in root_dir (filtering out node_modules, .git, .venv)
+        ignored_names = {"node_modules", ".git", ".venv", "__pycache__", "coverage"}
+        raw_htmls = glob.glob(os.path.join(root_dir, "**", "index.html"), recursive=True)
+        filtered_htmls = [
+            p for p in raw_htmls
+            if not any(part in ignored_names for part in os.path.relpath(p, root_dir).split(os.sep))
+        ]
+        if filtered_htmls:
+            filtered_htmls.sort(key=lambda p: len(os.path.relpath(p, root_dir).split(os.sep)))
+            return os.path.dirname(filtered_htmls[0])
 
         # 6. Fallback to root_dir
         return root_dir
@@ -219,8 +238,8 @@ class DockerSandbox:
                     "pnpm": "pnpm install || pnpm install --no-frozen-lockfile",
                     "yarn": "yarn install",
                     "bun": "bun install",
-                    "npm": "npm install --include=dev"
-                }.get(package_manager, "npm install --include=dev")
+                    "npm": "npm install --include=dev || npm install --include=dev --legacy-peer-deps || npm install --include=dev --legacy-peer-deps --force"
+                }.get(package_manager, "npm install --include=dev || npm install --include=dev --legacy-peer-deps || npm install --include=dev --legacy-peer-deps --force")
 
                 script_lines.append(f'echo "==> Installing dependencies with {package_manager}..."')
                 script_lines.append(install_cmd)
@@ -231,12 +250,14 @@ class DockerSandbox:
             # Execute build command inside container
             if build_command:
                 script_lines.append(f'echo "==> Running build command: {build_command}..."')
-                script_lines.append(f"NODE_ENV=production {build_command}")
+                script_lines.append(f"CI=false PUBLIC_URL=. VITE_BASE=./ NODE_ENV=production {build_command}")
 
             combined_script = "\n".join(script_lines)
 
             sanitized_env = {
-                "CI": "true",
+                "CI": "false",
+                "PUBLIC_URL": ".",
+                "VITE_BASE": "./",
                 **env_vars
             }
 
@@ -308,6 +329,8 @@ class DockerSandbox:
         env = {
             **os.environ,
             "CI": "false",
+            "PUBLIC_URL": ".",
+            "VITE_BASE": "./",
             **env_vars
         }
         # Do not enforce NODE_ENV=production during dependency installation so devDependencies (vite, tsc, etc.) are installed
@@ -318,6 +341,37 @@ class DockerSandbox:
         node_bin_dir = os.path.join(workspace_dir, "node_modules", ".bin")
         if os.path.exists(node_bin_dir):
             env["PATH"] = f"{node_bin_dir}{os.pathsep}{env.get('PATH', '')}"
+
+        # If root package.json defines workspaces and workspace_dir is a subfolder, bootstrap workspaces first
+        root_dir = artifact_root or workspace_dir
+        root_pkg_path = os.path.join(root_dir, "package.json")
+        if os.path.exists(root_pkg_path) and workspace_dir != root_dir:
+            try:
+                with open(root_pkg_path, "r", encoding="utf-8") as f:
+                    root_pkg = json.load(f)
+                if "workspaces" in root_pkg:
+                    await log_callback(BuildLogEvent(
+                        stage=BuildStage.DEPENDENCIES.value,
+                        level=LogLevel.INFO,
+                        message="Monorepo npm workspaces detected: bootstrapping root workspace packages..."
+                    ))
+                    root_proc = await asyncio.create_subprocess_shell(
+                        "npm install --include=dev --legacy-peer-deps",
+                        cwd=root_dir,
+                        env=env,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT
+                    )
+                    while True:
+                        r_line = await root_proc.stdout.readline()
+                        if not r_line:
+                            break
+                        r_msg = r_line.decode('utf-8', errors='replace').strip()
+                        if r_msg:
+                            await log_callback(BuildLogEvent(stage=BuildStage.DEPENDENCIES.value, level=LogLevel.INFO, message=r_msg))
+                    await root_proc.wait()
+            except Exception as e:
+                logger.warning(f"Root workspace bootstrap notice: {e}")
 
         # 1. Install dependencies only if project manifest is present
         if has_package_json and package_manager != "none":
@@ -383,11 +437,37 @@ class DockerSandbox:
                         ))
                 await fallback_proc.wait()
                 if fallback_proc.returncode != 0:
-                    raise SandboxExecutionError(
-                        f"Dependency installation failed with code {fallback_proc.returncode}",
+                    force_cmd = "npm install --include=dev --legacy-peer-deps --force"
+                    await log_callback(BuildLogEvent(
                         stage=BuildStage.DEPENDENCIES.value,
-                        exit_code=fallback_proc.returncode
+                        level=LogLevel.WARNING,
+                        message=f"Retrying with '{force_cmd}'..."
+                    ))
+                    force_proc = await asyncio.create_subprocess_shell(
+                        force_cmd,
+                        cwd=workspace_dir,
+                        env=env,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT
                     )
+                    while True:
+                        line = await force_proc.stdout.readline()
+                        if not line:
+                            break
+                        msg = line.decode('utf-8', errors='replace').strip()
+                        if msg:
+                            await log_callback(BuildLogEvent(
+                                stage=BuildStage.DEPENDENCIES.value,
+                                level=LogLevel.INFO,
+                                message=msg
+                            ))
+                    await force_proc.wait()
+                    if force_proc.returncode != 0:
+                        raise SandboxExecutionError(
+                            f"Dependency installation failed with code {force_proc.returncode}",
+                            stage=BuildStage.DEPENDENCIES.value,
+                            exit_code=force_proc.returncode
+                        )
 
             # Re-check node_modules/.bin after installation to add to PATH
             if os.path.exists(node_bin_dir) and node_bin_dir not in env.get("PATH", ""):
@@ -439,7 +519,9 @@ class DockerSandbox:
             build_env = {
                 **env,
                 "NODE_ENV": "production",
-                "CI": "false"
+                "CI": "false",
+                "PUBLIC_URL": ".",
+                "VITE_BASE": "./"
             }
 
             proc = await asyncio.create_subprocess_shell(
@@ -464,11 +546,50 @@ class DockerSandbox:
 
             await proc.wait()
             if proc.returncode != 0:
-                raise SandboxExecutionError(
-                    f"Build failed with code {proc.returncode}",
-                    stage=BuildStage.BUILD.value,
-                    exit_code=proc.returncode
-                )
+                # If build failed and command included typechecking or linting (e.g. tsc && vite build),
+                # attempt fallback to direct bundler invocation to bypass strict typechecking for preview deployment
+                bundler_fallback = None
+                has_vite = os.path.exists(os.path.join(workspace_dir, "vite.config.ts")) or os.path.exists(os.path.join(workspace_dir, "vite.config.js")) or "vite" in build_command.lower()
+                has_cra = os.path.exists(os.path.join(workspace_dir, "node_modules", ".bin", "react-scripts")) or "react-scripts" in build_command.lower()
+
+                if has_vite:
+                    bundler_fallback = "npx vite build --base=./"
+                elif has_cra:
+                    bundler_fallback = "npx react-scripts build"
+
+                if bundler_fallback and bundler_fallback != build_command:
+                    await log_callback(BuildLogEvent(
+                        stage=BuildStage.BUILD.value,
+                        level=LogLevel.WARNING,
+                        message=f"Build command failed with code {proc.returncode}. Retrying with direct bundler execution '{bundler_fallback}' to bypass strict typechecking for preview deployment..."
+                    ))
+                    fb_proc = await asyncio.create_subprocess_shell(
+                        bundler_fallback,
+                        cwd=workspace_dir,
+                        env=build_env,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT
+                    )
+                    while True:
+                        fb_line = await fb_proc.stdout.readline()
+                        if not fb_line:
+                            break
+                        fb_msg = fb_line.decode('utf-8', errors='replace').strip()
+                        if fb_msg:
+                            await log_callback(BuildLogEvent(stage=BuildStage.BUILD.value, level=LogLevel.INFO, message=fb_msg))
+                    await fb_proc.wait()
+                    if fb_proc.returncode != 0:
+                        raise SandboxExecutionError(
+                            f"Build failed with code {fb_proc.returncode}",
+                            stage=BuildStage.BUILD.value,
+                            exit_code=fb_proc.returncode
+                        )
+                else:
+                    raise SandboxExecutionError(
+                        f"Build failed with code {proc.returncode}",
+                        stage=BuildStage.BUILD.value,
+                        exit_code=proc.returncode
+                    )
 
         real_root = artifact_root or workspace_dir
         return self._resolve_output_directory(real_root, output_directory)
