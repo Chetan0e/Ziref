@@ -48,42 +48,11 @@ async def _publish_worker_heartbeat():
     except Exception as e:
         logger.debug(f"Heartbeat write note: {e}")
 
-async def _recover_stalled_jobs():
-    try:
-        from services.api.core.redis_client import push_job
-        db = get_database()
-        cursor = db.builds.find({"status": "QUEUED"})
-        recovered_builds = 0
-        async for b in cursor:
-            await push_job("build", {
-                "build_id": str(b["_id"]),
-                "project_id": b["project_id"],
-                "upload_id": b["upload_id"],
-                "package_manager": b.get("package_manager"),
-                "build_command": b.get("build_command"),
-                "output_directory": b.get("output_directory")
-            })
-            recovered_builds += 1
-        if recovered_builds > 0:
-            logger.info(f"[Worker Engine] Recovered {recovered_builds} previously queued build jobs.")
-
-        m_cursor = db.mobile_builds.find({"status": "APP_QUEUED"})
-        recovered_apps = 0
-        async for mb in m_cursor:
-            await push_job("app_build", {
-                "mobile_build_id": str(mb["_id"]),
-                "mobile_app_id": mb["mobile_app_id"],
-                "project_id": mb["project_id"]
-            })
-            recovered_apps += 1
-        if recovered_apps > 0:
-            logger.info(f"[Worker Engine] Recovered {recovered_apps} previously queued mobile app build jobs.")
-    except Exception as e:
-        logger.debug(f"Job recovery note: {e}")
+from services.api.core.job_recovery import recover_stalled_jobs
 
 async def _embedded_worker_runner():
     logger.info("Embedded worker engine started. Monitoring build, deploy, and mobile APK queues.")
-    await _recover_stalled_jobs()
+    await recover_stalled_jobs()
     last_heartbeat = 0.0
 
     while True:

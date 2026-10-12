@@ -57,9 +57,12 @@ async def _publish_heartbeat():
     except Exception as e:
         logger.debug(f"Heartbeat write note: {e}")
 
+from services.api.core.job_recovery import recover_stalled_jobs
+
 async def worker_loop():
     logger.info(f"Ziref Worker started in environment: {settings.APP_ENV}")
     await connect_to_database()
+    await recover_stalled_jobs()
     last_heartbeat = 0.0
 
     while running:

@@ -22,12 +22,17 @@ class MemoryCursor:
     def sort(self, key_or_list, direction=1):
         field = key_or_list[0][0] if isinstance(key_or_list, list) else key_or_list
         reverse = (key_or_list[0][1] == -1) if isinstance(key_or_list, list) else (direction == -1)
-        self.items.sort(key=lambda x: x.get(field, ""), reverse=reverse)
+        self.items.sort(key=lambda x: str(x.get(field, "")), reverse=reverse)
         return self
 
     def limit(self, count: int):
         self.items = self.items[:count]
         return self
+
+    async def to_list(self, length: Optional[int] = None) -> List[Dict[str, Any]]:
+        if length is not None:
+            return [d.copy() for d in self.items[:length]]
+        return [d.copy() for d in self.items]
 
     def __aiter__(self):
         self._index = 0
@@ -45,30 +50,49 @@ class MemoryCollection:
         self.name = name
         self.parent = parent_db
 
+    def _get_val(self, doc: Dict[str, Any], key: str) -> Any:
+        if "." in key:
+            curr = doc
+            for part in key.split("."):
+                if isinstance(curr, dict):
+                    curr = curr.get(part)
+                else:
+                    return None
+            return curr
+        return doc.get(key)
+
     def _matches(self, doc: Dict[str, Any], filter_dict: Dict[str, Any]) -> bool:
         for k, v in filter_dict.items():
             if k == "_id":
                 if str(doc.get("_id")) != str(v):
                     return False
-            elif isinstance(v, dict):
-                # Simple handling of query operators
-                if "$in" in v:
-                    if doc.get(k) not in v["$in"]:
-                        return False
-                if "$gte" in v:
-                    if doc.get(k, "") < v["$gte"]:
-                        return False
-                if "$lte" in v:
-                    if doc.get(k, "") > v["$lte"]:
-                        return False
-                if "$gt" in v:
-                    if doc.get(k, "") <= v["$gt"]:
-                        return False
-                if "$lt" in v:
-                    if doc.get(k, "") >= v["$lt"]:
-                        return False
-            elif doc.get(k) != v:
-                return False
+            else:
+                doc_val = self._get_val(doc, k)
+                if isinstance(v, dict):
+                    # Simple handling of query operators
+                    if "$in" in v:
+                        if doc_val not in v["$in"]:
+                            return False
+                    if "$nin" in v:
+                        if doc_val in v["$nin"]:
+                            return False
+                    if "$ne" in v:
+                        if doc_val == v["$ne"]:
+                            return False
+                    if "$gte" in v:
+                        if doc_val is None or doc_val < v["$gte"]:
+                            return False
+                    if "$lte" in v:
+                        if doc_val is None or doc_val > v["$lte"]:
+                            return False
+                    if "$gt" in v:
+                        if doc_val is None or doc_val <= v["$gt"]:
+                            return False
+                    if "$lt" in v:
+                        if doc_val is None or doc_val >= v["$lt"]:
+                            return False
+                elif doc_val != v:
+                    return False
         return True
 
     async def insert_one(self, doc: Dict[str, Any]):
@@ -133,6 +157,10 @@ class MemoryCollection:
                     for k, val in update["$push"].items():
                         doc.setdefault(k, []).append(val)
                         modified = 1
+                if "$unset" in update:
+                    for k in update["$unset"]:
+                        doc.pop(k, None)
+                    modified = 1
                 self.parent.schedule_save()
                 break
 
@@ -151,8 +179,33 @@ class MemoryCollection:
         return UpdateResult()
 
     async def find_one_and_update(self, filter_dict: Dict[str, Any], update: Dict[str, Any], upsert: bool = False, return_document: bool = True):
-        await self.update_one(filter_dict, update, upsert=upsert)
-        return await self.find_one(filter_dict)
+        self.parent.reload_if_stale()
+        filter_dict = filter_dict or {}
+        for doc in self.parent.data.get(self.name, []):
+            if self._matches(doc, filter_dict):
+                old_doc = doc.copy()
+                if "$set" in update:
+                    doc.update(update["$set"])
+                if "$push" in update:
+                    for k, val in update["$push"].items():
+                        doc.setdefault(k, []).append(val)
+                if "$unset" in update:
+                    for k in update["$unset"]:
+                        doc.pop(k, None)
+                self.parent.schedule_save()
+                return doc.copy() if return_document else old_doc
+
+        if upsert:
+            new_doc = filter_dict.copy()
+            if "$set" in update:
+                new_doc.update(update["$set"])
+            if "$setOnInsert" in update:
+                new_doc.update(update["$setOnInsert"])
+            r = await self.insert_one(new_doc)
+            new_doc["_id"] = r.inserted_id
+            return new_doc.copy()
+
+        return None
 
     async def delete_one(self, filter_dict: Dict[str, Any]):
         self.parent.reload_if_stale()
